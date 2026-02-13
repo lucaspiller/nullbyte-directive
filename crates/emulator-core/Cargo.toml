@@ -9,6 +9,21 @@ publish = false
 [lib]
 path = "src/lib.rs"
 
+[features]
+default = []
+serde = ["dep:serde"]
+
+[dependencies]
+thiserror = "2.0.12"
+serde = { version = "1.0.219", features = ["derive"], optional = true }
+
+[dev-dependencies]
+proptest = "1.6.0"
+rstest = "0.25.0"
+
+[package.metadata.tooling]
+fuzz_harness = "TODO"
+
 [lints.rust]
 unsafe_code = "forbid"
 missing_docs = "deny"
