@@ -24,8 +24,9 @@ pub use diag::{
 /// Public host-facing API contract and integration types.
 pub mod api;
 pub use api::{
-    CanonicalStateLayout, CoreConfig, CoreProfile, CoreSnapshot, CoreState, EventEnqueueError,
-    EventQueueSnapshot, MmioBus, MmioError, MmioWriteResult, RunBoundary, RunOutcome,
+    replay_from_snapshot, replay_with_trace, CanonicalStateLayout, CoreConfig, CoreProfile,
+    CoreSnapshot, CoreState, EventEnqueueError, EventQueueSnapshot, MmioBus, MmioError,
+    MmioWriteResult, ReplayEventStream, ReplayResult, RunBoundary, RunOutcome, SimpleTraceSink,
     SnapshotLayoutError, SnapshotVersion, StepOutcome, TraceEvent, TraceSink,
     DEFAULT_TICK_BUDGET_CYCLES, EVENT_QUEUE_CAPACITY, VEC_EVENT, VEC_FAULT, VEC_TRAP,
 };
@@ -58,7 +59,8 @@ pub use timing::{cycle_cost, CycleCostKind, CYCLE_COST_TABLE};
 /// Instruction execution pipeline.
 pub mod execute;
 pub use execute::{
-    commit_execution, execute_instruction, step_one, ExecuteOutcome, ExecuteState, FlagsUpdate,
+    commit_execution, execute_instruction, run_one, run_one_with_trace, step_one, ExecuteOutcome,
+    ExecuteState, FlagsUpdate,
 };
 
 #[cfg(test)]

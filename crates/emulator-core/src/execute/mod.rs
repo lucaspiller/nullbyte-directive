@@ -34,8 +34,8 @@ use crate::memory::{read_u16_be, write_u16_be};
 use crate::state::registers::FLAGS_ACTIVE_MASK;
 use crate::timing::CycleCostKind;
 use crate::{
-    CoreConfig, CoreState, Decoder, GeneralRegister, MmioBus, RunState, StepOutcome, VEC_EVENT,
-    VEC_FAULT, VEC_TRAP,
+    CoreConfig, CoreState, Decoder, GeneralRegister, MmioBus, RunBoundary, RunOutcome, RunState,
+    StepOutcome, TraceSink, VEC_EVENT, VEC_FAULT, VEC_TRAP,
 };
 
 /// Outcome of executing a single instruction.
@@ -1298,12 +1298,128 @@ fn fetch_and_decode(pc: u16, memory: &[u8]) -> Result<DecodedInstruction, crate:
     Decoder::decode(raw_word).into()
 }
 
+/// Runs multiple steps until a specified boundary is reached.
+///
+/// This provides batched execution for efficient host-side iteration.
+/// Returns the total number of steps executed and the final outcome.
+pub fn run_one(
+    state: &mut CoreState,
+    mmio: &mut dyn MmioBus,
+    config: &CoreConfig,
+    boundary: RunBoundary,
+) -> RunOutcome {
+    let mut steps = 0u32;
+
+    loop {
+        let outcome = step_one(state, mmio, config);
+        steps += 1;
+
+        let should_stop = match boundary {
+            RunBoundary::TickBoundary => {
+                matches!(outcome, StepOutcome::HaltedForTick)
+            }
+            RunBoundary::Halted => {
+                matches!(outcome, StepOutcome::HaltedForTick)
+            }
+            RunBoundary::Fault => {
+                matches!(outcome, StepOutcome::Fault { .. })
+            }
+        };
+
+        if should_stop {
+            return RunOutcome {
+                steps,
+                final_step: outcome,
+            };
+        }
+
+        match outcome {
+            StepOutcome::TrapDispatch { .. }
+            | StepOutcome::EventDispatch { .. }
+            | StepOutcome::Fault { .. } => {
+                return RunOutcome {
+                    steps,
+                    final_step: outcome,
+                };
+            }
+            StepOutcome::Retired { .. } | StepOutcome::HaltedForTick => {}
+        }
+    }
+}
+
+/// Runs multiple steps with deterministic trace callback dispatch.
+///
+/// When `trace_sink` is `None`, tracing is disabled and this function has
+/// zero/neat-zero overhead compared to `run_one`.
+pub fn run_one_with_trace(
+    state: &mut CoreState,
+    mmio: &mut dyn MmioBus,
+    config: &CoreConfig,
+    boundary: RunBoundary,
+    mut trace_sink: Option<&mut dyn TraceSink>,
+) -> RunOutcome {
+    let mut steps = 0u32;
+
+    loop {
+        let pc = state.arch.pc();
+        let raw_word = {
+            let lo = state.memory[usize::from(pc)];
+            let hi = state.memory[usize::from(pc.wrapping_add(1))];
+            u16::from_be_bytes([lo, hi])
+        };
+
+        if let Some(sink) = trace_sink.as_deref_mut() {
+            sink.on_event(crate::api::TraceEvent::InstructionStart { pc, raw_word });
+        }
+
+        let outcome = step_one(state, mmio, config);
+        steps += 1;
+
+        if let Some(sink) = trace_sink.as_deref_mut() {
+            match outcome {
+                StepOutcome::Retired { cycles } => {
+                    sink.on_event(crate::api::TraceEvent::InstructionRetired { pc, cycles });
+                }
+                StepOutcome::Fault { cause } => {
+                    sink.on_event(crate::api::TraceEvent::FaultRaised { cause, pc });
+                }
+                _ => {}
+            }
+        }
+
+        let should_stop = match boundary {
+            RunBoundary::TickBoundary => matches!(outcome, StepOutcome::HaltedForTick),
+            RunBoundary::Halted => matches!(outcome, StepOutcome::HaltedForTick),
+            RunBoundary::Fault => matches!(outcome, StepOutcome::Fault { .. }),
+        };
+
+        if should_stop {
+            return RunOutcome {
+                steps,
+                final_step: outcome,
+            };
+        }
+
+        match outcome {
+            StepOutcome::TrapDispatch { .. }
+            | StepOutcome::EventDispatch { .. }
+            | StepOutcome::Fault { .. } => {
+                return RunOutcome {
+                    steps,
+                    final_step: outcome,
+                };
+            }
+            StepOutcome::Retired { .. } | StepOutcome::HaltedForTick => {}
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::decoder::Decoder;
     use crate::encoding::OpcodeEncoding;
-    use crate::EventQueueSnapshot;
+    use crate::{EventQueueSnapshot, RunBoundary, SimpleTraceSink};
 
     fn decode_instr(word: u16) -> DecodedInstruction {
         let result = Decoder::decode(word);
@@ -2062,5 +2178,133 @@ mod tests {
 
         assert!(matches!(outcome, StepOutcome::Retired { .. }));
         assert!(mmio.write_seen);
+    }
+
+    #[test]
+    fn run_one_executes_until_tick_boundary() {
+        let mut state = CoreState::default();
+        state.memory[0x0000] = 0x00;
+        state.memory[0x0001] = 0x00;
+        state.memory[0x0002] = 0x00;
+        state.memory[0x0003] = 0x00;
+        state.memory[0x0004] = 0x00;
+        state.memory[0x0005] = 0x00;
+
+        struct NoMmio;
+        impl MmioBus for NoMmio {
+            fn read16(&mut self, _addr: u16) -> Result<u16, crate::api::MmioError> {
+                Err(crate::api::MmioError::ReadFailed)
+            }
+            fn write16(
+                &mut self,
+                _addr: u16,
+                _value: u16,
+            ) -> Result<crate::api::MmioWriteResult, crate::api::MmioError> {
+                Err(crate::api::MmioError::WriteFailed)
+            }
+        }
+
+        let mut mmio = NoMmio;
+        let config = CoreConfig::default();
+
+        let result = run_one(&mut state, &mut mmio, &config, RunBoundary::TickBoundary);
+
+        assert!(result.steps >= 1);
+        assert!(matches!(result.final_step, StepOutcome::HaltedForTick));
+    }
+
+    #[test]
+    fn run_one_executes_until_fault_boundary() {
+        let mut state = CoreState::default();
+        state.memory[0x0000] = 0xFF;
+        state.memory[0x0001] = 0xFF;
+
+        struct NoMmio;
+        impl MmioBus for NoMmio {
+            fn read16(&mut self, _addr: u16) -> Result<u16, crate::api::MmioError> {
+                Err(crate::api::MmioError::ReadFailed)
+            }
+            fn write16(
+                &mut self,
+                _addr: u16,
+                _value: u16,
+            ) -> Result<crate::api::MmioWriteResult, crate::api::MmioError> {
+                Err(crate::api::MmioError::WriteFailed)
+            }
+        }
+
+        let mut mmio = NoMmio;
+        let config = CoreConfig::default();
+
+        let result = run_one(&mut state, &mut mmio, &config, RunBoundary::Fault);
+
+        assert_eq!(result.steps, 1);
+        assert!(matches!(result.final_step, StepOutcome::Fault { .. }));
+    }
+
+    #[test]
+    fn run_one_with_trace_collects_events() {
+        let mut state = CoreState::default();
+        state.memory[0x0000] = 0x00;
+        state.memory[0x0001] = 0x00;
+        state.memory[0x0002] = 0x00;
+        state.memory[0x0003] = 0x00;
+
+        struct NoMmio;
+        impl MmioBus for NoMmio {
+            fn read16(&mut self, _addr: u16) -> Result<u16, crate::api::MmioError> {
+                Err(crate::api::MmioError::ReadFailed)
+            }
+            fn write16(
+                &mut self,
+                _addr: u16,
+                _value: u16,
+            ) -> Result<crate::api::MmioWriteResult, crate::api::MmioError> {
+                Err(crate::api::MmioError::WriteFailed)
+            }
+        }
+
+        let mut mmio = NoMmio;
+        let config = CoreConfig::default();
+        let mut trace = SimpleTraceSink::new();
+
+        let result = run_one_with_trace(
+            &mut state,
+            &mut mmio,
+            &config,
+            RunBoundary::Fault,
+            Some(&mut trace),
+        );
+
+        assert!(result.steps >= 1);
+        assert!(!trace.events().is_empty());
+    }
+
+    #[test]
+    fn run_one_with_null_sink_has_no_overhead() {
+        let mut state = CoreState::default();
+        state.memory[0x0000] = 0x00;
+        state.memory[0x0001] = 0x00;
+
+        struct NoMmio;
+        impl MmioBus for NoMmio {
+            fn read16(&mut self, _addr: u16) -> Result<u16, crate::api::MmioError> {
+                Err(crate::api::MmioError::ReadFailed)
+            }
+            fn write16(
+                &mut self,
+                _addr: u16,
+                _value: u16,
+            ) -> Result<crate::api::MmioWriteResult, crate::api::MmioError> {
+                Err(crate::api::MmioError::WriteFailed)
+            }
+        }
+
+        let mut mmio = NoMmio;
+        let config = CoreConfig::default();
+
+        let result = run_one_with_trace(&mut state, &mut mmio, &config, RunBoundary::Fault, None);
+
+        assert!(result.steps >= 1);
     }
 }

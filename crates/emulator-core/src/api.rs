@@ -2,9 +2,11 @@
 //!
 //! These are intentionally type-only scaffolds for FR-8/9/11/15 and NFR-4.
 
+use std::fmt::Write;
+
 use crate::{
-    new_address_space, ArchitecturalState, FaultCode, GeneralRegister, RunState,
-    CAP_AUTHORITY_DEFAULT_MASK, CAP_RESTRICTED_DEFAULT_MASK, GENERAL_REGISTER_COUNT,
+    new_address_space, run_one, run_one_with_trace, ArchitecturalState, FaultCode, GeneralRegister,
+    RunState, CAP_AUTHORITY_DEFAULT_MASK, CAP_RESTRICTED_DEFAULT_MASK, GENERAL_REGISTER_COUNT,
 };
 use thiserror::Error;
 
@@ -539,6 +541,190 @@ pub enum TraceEvent {
 pub trait TraceSink {
     /// Records an event in execution order.
     fn on_event(&mut self, event: TraceEvent);
+}
+
+/// A trace sink that collects events in memory for later analysis.
+///
+/// This provides the golden trace format for diff-based debugging.
+#[derive(Debug, Clone, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+pub struct SimpleTraceSink {
+    events: Vec<TraceEvent>,
+}
+
+impl SimpleTraceSink {
+    /// Creates a new empty trace sink.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self { events: Vec::new() }
+    }
+
+    /// Returns a reference to collected trace events.
+    #[must_use]
+    pub fn events(&self) -> &[TraceEvent] {
+        &self.events
+    }
+
+    /// Clears all collected events.
+    pub fn clear(&mut self) {
+        self.events.clear();
+    }
+
+    /// Formats collected events as a golden trace string for debugging.
+    ///
+    /// Each line contains: `PC: OPCODE CYCLES` or `PC: FAULT CAUSE`
+    #[must_use]
+    #[allow(clippy::missing_panics_doc)]
+    pub fn format_golden(&self) -> String {
+        let mut output = String::new();
+        for event in &self.events {
+            match event {
+                TraceEvent::InstructionStart { pc, raw_word } => {
+                    output
+                        .write_fmt(format_args!("{pc:04X}: {raw_word:04X} "))
+                        .unwrap();
+                }
+                TraceEvent::InstructionRetired { pc: _, cycles } => {
+                    output.write_fmt(format_args!("{cycles} cycles\n")).unwrap();
+                }
+                TraceEvent::MemoryAccess { .. } => {}
+                TraceEvent::FaultRaised { cause, pc: _ } => {
+                    output
+                        .write_fmt(format_args!("FAULT {:02X}\n", cause.as_u8()))
+                        .unwrap();
+                }
+            }
+        }
+        output
+    }
+}
+
+/// A deterministic event stream for replay harness.
+///
+/// Events are injected into the core's event queue in FIFO order
+/// at specified ticks during replay.
+#[derive(Debug, Clone, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+pub struct ReplayEventStream {
+    events: Vec<u8>,
+}
+
+impl ReplayEventStream {
+    /// Creates a new empty event stream.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self { events: Vec::new() }
+    }
+
+    /// Adds an event ID to be injected during replay.
+    pub fn add_event(&mut self, event_id: u8) {
+        self.events.push(event_id);
+    }
+
+    /// Returns the event stream as a slice.
+    #[must_use]
+    pub fn as_slice(&self) -> &[u8] {
+        &self.events
+    }
+
+    /// Returns the number of events in the stream.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.events.len()
+    }
+
+    /// Returns true if the stream is empty.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.events.is_empty()
+    }
+}
+
+/// Result of a replay operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplayResult {
+    /// Final core state after replay.
+    pub final_state: CoreState,
+    /// Total steps executed during replay.
+    pub steps: u32,
+    /// Final step outcome.
+    pub final_outcome: StepOutcome,
+}
+
+/// Replays execution from a snapshot with an event stream.
+///
+/// This provides deterministic replay by:
+/// 1. Restoring state from the snapshot
+/// 2. Pre-loading events into the queue
+/// 3. Executing until a boundary or fault
+///
+/// # Errors
+///
+/// Returns errors from snapshot import if the snapshot is invalid.
+pub fn replay_from_snapshot(
+    snapshot: CoreSnapshot,
+    event_stream: &ReplayEventStream,
+    mmio: &mut dyn MmioBus,
+    config: &CoreConfig,
+    boundary: RunBoundary,
+) -> Result<ReplayResult, SnapshotLayoutError> {
+    let mut state = snapshot.try_into_core_state()?;
+
+    for &event_id in event_stream.as_slice() {
+        state
+            .event_queue
+            .enqueue(event_id)
+            .map_err(|_| SnapshotLayoutError::InvalidEventQueueLength(u8::MAX))?;
+    }
+
+    let run_outcome = run_one(&mut state, mmio, config, boundary);
+
+    Ok(ReplayResult {
+        final_state: state,
+        steps: run_outcome.steps,
+        final_outcome: run_outcome.final_step,
+    })
+}
+
+/// Replays execution with trace collection.
+///
+/// Convenience function that combines replay with trace gathering.
+///
+/// # Errors
+///
+/// Returns errors from snapshot import if the snapshot is invalid.
+pub fn replay_with_trace(
+    snapshot: CoreSnapshot,
+    event_stream: &ReplayEventStream,
+    mmio: &mut dyn MmioBus,
+    config: &CoreConfig,
+    boundary: RunBoundary,
+) -> Result<(ReplayResult, SimpleTraceSink), SnapshotLayoutError> {
+    let mut state = snapshot.try_into_core_state()?;
+
+    for &event_id in event_stream.as_slice() {
+        state
+            .event_queue
+            .enqueue(event_id)
+            .map_err(|_| SnapshotLayoutError::InvalidEventQueueLength(u8::MAX))?;
+    }
+
+    let mut trace = SimpleTraceSink::new();
+    let run_outcome = run_one_with_trace(&mut state, mmio, config, boundary, Some(&mut trace));
+
+    let result = ReplayResult {
+        final_state: state,
+        steps: run_outcome.steps,
+        final_outcome: run_outcome.final_step,
+    };
+
+    Ok((result, trace))
+}
+
+impl TraceSink for SimpleTraceSink {
+    fn on_event(&mut self, event: TraceEvent) {
+        self.events.push(event);
+    }
 }
 
 #[cfg(test)]
