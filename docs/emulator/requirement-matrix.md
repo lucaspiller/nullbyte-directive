@@ -11,6 +11,12 @@
 - Every new emulator-core implementation PR should update this matrix and link
   test IDs for touched rows.
 
+## Implemented Artifacts
+
+- Fault taxonomy scaffold (`FaultCode`, `FaultClass`) is implemented in
+  `crates/emulator-core/src/fault.rs` with stable code mapping tests. This
+  artifact establishes shared fault language for FR-2, FR-6, FR-13, and NFR-3.
+
 ## Requirement Traceability
 
 | ID    | PRD Requirement                                 | Implementation module(s) (planned)                                                                                                                                                                                             | Test file(s) (planned)                                                                                                                                   | Status  |
