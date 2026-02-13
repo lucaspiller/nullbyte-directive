@@ -175,8 +175,8 @@ Inst OP SUB Cost Description
 Control (OP=0x0):
 
 NOP 0x0 000 1 Do nothing, advance PC SYNC 0x0 001 1 Barrier: all prior writes
-visible HALT 0x0 002 1 Stop the core TRAP 0x0 003 1 Software trap using R[RD] as
-trap id SWI 0x0 004 1 Software trap using immediate trap id
+visible HALT 0x0 002 1 Halt for remainder of tick TRAP 0x0 003 1 Software trap
+using R[RD] as trap id SWI 0x0 004 1 Software trap using immediate trap id
 
 Data movement (OP=0x1..0x3):
 
@@ -350,6 +350,17 @@ EWAIT: If the event queue is empty, PC stays put (stall). If non-empty, advances
 to the next instruction. EGET: If non-empty, R[RD] := event id (zero-extended).
 If empty, R[RD] := 0. ERET: Returns from handler. Faults if not in handler
 context.
+
+HALT behavior:
+
+HALT retires normally (cost 1), advances PC to PC_next, and then enters halted
+state for the remainder of the current tick. Event arrival does not wake a HALTed
+core mid-tick. At the next tick boundary, the core resumes execution from the
+current PC with a fresh tick budget.
+
+Permanent halt state can still occur through fault escalation paths (section 10
+budget recovery failure, section 12 double-fault or invalid fault vector). A
+permanently halted core requires external reset.
 
 Example (event polling loop):
 
