@@ -58,7 +58,7 @@ pub use timing::{cycle_cost, CycleCostKind, CYCLE_COST_TABLE};
 /// Instruction execution pipeline.
 pub mod execute;
 pub use execute::{
-    commit_execution, execute_instruction, ExecuteOutcome, ExecuteState, FlagsUpdate,
+    commit_execution, execute_instruction, step_one, ExecuteOutcome, ExecuteState, FlagsUpdate,
 };
 
 #[cfg(test)]

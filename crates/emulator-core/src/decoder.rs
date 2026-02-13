@@ -198,6 +198,15 @@ impl DecodedOrFault {
     }
 }
 
+impl From<DecodedOrFault> for Result<DecodedInstruction, FaultCode> {
+    fn from(value: DecodedOrFault) -> Self {
+        match value {
+            DecodedOrFault::Instruction(i) => Ok(i),
+            DecodedOrFault::Fault(r) => Err(r.code()),
+        }
+    }
+}
+
 /// Instruction decoder for the Nullbyte One ISA.
 ///
 /// Validates instruction encodings and produces decoded instructions

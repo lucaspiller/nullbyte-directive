@@ -32,7 +32,7 @@ use crate::decoder::{AddressingMode, DecodedInstruction, RegisterField};
 use crate::encoding::OpcodeEncoding;
 use crate::state::registers::FLAGS_ACTIVE_MASK;
 use crate::timing::CycleCostKind;
-use crate::{CoreState, GeneralRegister, MmioBus};
+use crate::{CoreConfig, CoreState, Decoder, GeneralRegister, MmioBus, RunState, StepOutcome};
 
 /// Outcome of executing a single instruction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,19 +144,19 @@ impl ExecuteState {
 
 /// Executes a single instruction following the 7-step commit sequence.
 ///
-/// Returns the execution outcome. On success, the caller must apply the committed
-/// side effects to the core state. On fault, no side effects should be applied
-/// (precise fault semantics).
+/// Returns both the execution outcome and the execution state. On success, the caller
+/// must apply the committed side effects to the core state. On fault, no side effects
+/// should be applied (precise fault semantics).
 #[allow(clippy::too_many_lines)]
 pub fn execute_instruction(
     instr: &DecodedInstruction,
     state: &mut CoreState,
     mmio: &mut dyn MmioBus,
-) -> ExecuteOutcome {
+) -> (ExecuteOutcome, ExecuteState) {
     let pc = state.arch.pc();
     let next_pc = pc.wrapping_add(2);
 
-    let mut exec = ExecuteState::new(0);
+    let mut exec = ExecuteState::default();
 
     match instr.encoding {
         OpcodeEncoding::Nop => execute_nop(&mut exec, next_pc),
@@ -203,24 +203,33 @@ pub fn execute_instruction(
     }
 
     if exec.trap_pending {
-        return ExecuteOutcome::TrapDispatch {
-            cause: exec.trap_cause.unwrap_or(0),
-        };
+        return (
+            ExecuteOutcome::TrapDispatch {
+                cause: exec.trap_cause.unwrap_or(0),
+            },
+            exec,
+        );
     }
 
     if exec.event_dispatch_pending {
-        return ExecuteOutcome::EventDispatch {
-            event_id: exec.event_id.unwrap_or(0),
-        };
+        return (
+            ExecuteOutcome::EventDispatch {
+                event_id: exec.event_id.unwrap_or(0),
+            },
+            exec,
+        );
     }
 
     if exec.halt_for_tick {
-        return ExecuteOutcome::HaltedForTick;
+        return (ExecuteOutcome::HaltedForTick, exec);
     }
 
-    ExecuteOutcome::Retired {
-        cycles: exec.cycles,
-    }
+    (
+        ExecuteOutcome::Retired {
+            cycles: exec.cycles,
+        },
+        exec,
+    )
 }
 
 /// Applies the committed side effects from execution to the core state.
@@ -981,6 +990,91 @@ const fn compute_nzcv_flags(result: u16, carry: bool, overflow: bool) -> FlagsUp
     }
 }
 
+/// Runs a single instruction step with budget enforcement and boundary transitions.
+///
+/// This function handles:
+/// - Boundary transitions (HaltedForTick -> Running)
+/// - Instruction decode and execution
+/// - Tick budget checking after commit
+/// - Budget fault handling
+pub fn step_one(state: &mut CoreState, mmio: &mut dyn MmioBus, config: &CoreConfig) -> StepOutcome {
+    match state.run_state {
+        RunState::FaultLatched(_) => {
+            return StepOutcome::Fault {
+                cause: state
+                    .run_state
+                    .latched_fault()
+                    .unwrap_or(crate::fault::FaultCode::IllegalEncoding),
+            };
+        }
+        RunState::HandlerContext => {}
+        RunState::HaltedForTick => {
+            let current_tick = state.arch.tick();
+            if current_tick >= config.tick_budget_cycles {
+                state.run_state =
+                    crate::state::RunState::FaultLatched(crate::fault::FaultCode::BudgetOverrun);
+                return StepOutcome::Fault {
+                    cause: crate::fault::FaultCode::BudgetOverrun,
+                };
+            }
+            state.run_state = crate::state::RunState::Running;
+        }
+        RunState::Running => {}
+    }
+
+    let pc = state.arch.pc();
+    let fetch_result = fetch_and_decode(pc, &state.memory);
+    let instruction = match fetch_result {
+        Ok(instr) => instr,
+        Err(cause) => {
+            return StepOutcome::Fault { cause };
+        }
+    };
+
+    let (outcome, exec_state) = execute_instruction(&instruction, state, mmio);
+
+    match outcome {
+        ExecuteOutcome::Retired { cycles } => {
+            commit_execution(state, &exec_state);
+
+            let new_tick = state.arch.tick();
+            if new_tick >= config.tick_budget_cycles {
+                state.run_state = crate::state::RunState::HaltedForTick;
+                return StepOutcome::HaltedForTick;
+            }
+
+            StepOutcome::Retired { cycles }
+        }
+        ExecuteOutcome::HaltedForTick => {
+            commit_execution(state, &exec_state);
+            state.run_state = crate::state::RunState::HaltedForTick;
+            StepOutcome::HaltedForTick
+        }
+        ExecuteOutcome::TrapDispatch { cause } => {
+            commit_execution(state, &exec_state);
+            state.run_state = crate::state::RunState::HandlerContext;
+            StepOutcome::TrapDispatch { cause }
+        }
+        ExecuteOutcome::EventDispatch { event_id } => {
+            commit_execution(state, &exec_state);
+            state.run_state = crate::state::RunState::HandlerContext;
+            StepOutcome::EventDispatch { event_id }
+        }
+        ExecuteOutcome::Fault { cause } => {
+            state.run_state = crate::state::RunState::FaultLatched(cause);
+            StepOutcome::Fault { cause }
+        }
+    }
+}
+
+fn fetch_and_decode(pc: u16, memory: &[u8]) -> Result<DecodedInstruction, crate::fault::FaultCode> {
+    let lo = memory[usize::from(pc)];
+    let hi = memory[usize::from(pc.wrapping_add(1))];
+    let raw_word = u16::from_be_bytes([lo, hi]);
+
+    Decoder::decode(raw_word).into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1053,8 +1147,328 @@ mod tests {
 
         let instr = decode_instr(0x0300);
         let mut exec = ExecuteState::new(0);
-        execute_math(&instr, &state, &mut exec, 0x0002, MathOp::Mod);
+        execute_math(&instr, &state, &mut exec, 0x0300, MathOp::Mod);
 
         assert_eq!(exec.dest_value, Some(0));
+    }
+
+    #[test]
+    fn step_one_executes_nop_instruction() {
+        let mut state = CoreState::default();
+        state.memory[0x0000] = 0x00;
+        state.memory[0x0001] = 0x00;
+
+        struct NoMmio;
+        impl MmioBus for NoMmio {
+            fn read16(&mut self, _addr: u16) -> Result<u16, crate::api::MmioError> {
+                Err(crate::api::MmioError::ReadFailed)
+            }
+            fn write16(
+                &mut self,
+                _addr: u16,
+                _value: u16,
+            ) -> Result<crate::api::MmioWriteResult, crate::api::MmioError> {
+                Err(crate::api::MmioError::WriteFailed)
+            }
+        }
+
+        let mut mmio = NoMmio;
+        let config = CoreConfig::default();
+
+        let outcome = step_one(&mut state, &mut mmio, &config);
+
+        assert!(matches!(outcome, StepOutcome::Retired { cycles: 1 }));
+        assert_eq!(state.arch.pc(), 0x0002);
+        assert_eq!(state.arch.tick(), 1);
+    }
+
+    #[test]
+    fn step_one_tick_increments_by_cycle_cost() {
+        let mut state = CoreState::default();
+        state.memory[0x0000] = 0x00;
+        state.memory[0x0001] = 0x00;
+
+        struct NoMmio;
+        impl MmioBus for NoMmio {
+            fn read16(&mut self, _addr: u16) -> Result<u16, crate::api::MmioError> {
+                Err(crate::api::MmioError::ReadFailed)
+            }
+            fn write16(
+                &mut self,
+                _addr: u16,
+                _value: u16,
+            ) -> Result<crate::api::MmioWriteResult, crate::api::MmioError> {
+                Err(crate::api::MmioError::WriteFailed)
+            }
+        }
+
+        let mut mmio = NoMmio;
+        let config = CoreConfig::default();
+
+        step_one(&mut state, &mut mmio, &config);
+
+        assert_eq!(state.arch.tick(), 1);
+    }
+
+    #[test]
+    fn step_one_halt_advances_pc_and_sets_halted_for_tick() {
+        let mut state = CoreState::default();
+        state.memory[0x0000] = 0x00;
+        state.memory[0x0001] = 0x10;
+
+        struct NoMmio;
+        impl MmioBus for NoMmio {
+            fn read16(&mut self, _addr: u16) -> Result<u16, crate::api::MmioError> {
+                Err(crate::api::MmioError::ReadFailed)
+            }
+            fn write16(
+                &mut self,
+                _addr: u16,
+                _value: u16,
+            ) -> Result<crate::api::MmioWriteResult, crate::api::MmioError> {
+                Err(crate::api::MmioError::WriteFailed)
+            }
+        }
+
+        let mut mmio = NoMmio;
+        let config = CoreConfig::default();
+
+        let outcome = step_one(&mut state, &mut mmio, &config);
+
+        assert!(matches!(outcome, StepOutcome::HaltedForTick));
+        assert_eq!(state.arch.pc(), 0x0002);
+        assert_eq!(state.run_state, RunState::HaltedForTick);
+    }
+
+    #[test]
+    fn step_one_resumes_from_halted_for_tick() {
+        let mut state = CoreState {
+            run_state: RunState::HaltedForTick,
+            ..CoreState::default()
+        };
+        state.arch.set_tick(100);
+        state.memory[0x0000] = 0x00;
+        state.memory[0x0001] = 0x00;
+
+        struct NoMmio;
+        impl MmioBus for NoMmio {
+            fn read16(&mut self, _addr: u16) -> Result<u16, crate::api::MmioError> {
+                Err(crate::api::MmioError::ReadFailed)
+            }
+            fn write16(
+                &mut self,
+                _addr: u16,
+                _value: u16,
+            ) -> Result<crate::api::MmioWriteResult, crate::api::MmioError> {
+                Err(crate::api::MmioError::WriteFailed)
+            }
+        }
+
+        let mut mmio = NoMmio;
+        let config = CoreConfig::default();
+
+        let outcome = step_one(&mut state, &mut mmio, &config);
+
+        assert!(matches!(outcome, StepOutcome::Retired { .. }));
+        assert_eq!(state.run_state, RunState::Running);
+    }
+
+    #[test]
+    fn step_one_budget_exceeded_triggers_halt() {
+        let mut state = CoreState::default();
+        state.arch.set_tick(639);
+        state.memory[0x0000] = 0x00;
+        state.memory[0x0001] = 0x00;
+
+        struct NoMmio;
+        impl MmioBus for NoMmio {
+            fn read16(&mut self, _addr: u16) -> Result<u16, crate::api::MmioError> {
+                Err(crate::api::MmioError::ReadFailed)
+            }
+            fn write16(
+                &mut self,
+                _addr: u16,
+                _value: u16,
+            ) -> Result<crate::api::MmioWriteResult, crate::api::MmioError> {
+                Err(crate::api::MmioError::WriteFailed)
+            }
+        }
+
+        let mut mmio = NoMmio;
+        let config = CoreConfig::default();
+
+        let outcome = step_one(&mut state, &mut mmio, &config);
+
+        assert!(matches!(outcome, StepOutcome::HaltedForTick));
+        assert_eq!(state.arch.tick(), 640);
+        assert_eq!(state.run_state, RunState::HaltedForTick);
+    }
+
+    #[test]
+    fn step_one_budget_exceeded_on_already_halted_faults() {
+        let mut state = CoreState {
+            run_state: RunState::HaltedForTick,
+            ..CoreState::default()
+        };
+        state.arch.set_tick(640);
+        state.memory[0x0000] = 0x00;
+        state.memory[0x0001] = 0x00;
+
+        struct NoMmio;
+        impl MmioBus for NoMmio {
+            fn read16(&mut self, _addr: u16) -> Result<u16, crate::api::MmioError> {
+                Err(crate::api::MmioError::ReadFailed)
+            }
+            fn write16(
+                &mut self,
+                _addr: u16,
+                _value: u16,
+            ) -> Result<crate::api::MmioWriteResult, crate::api::MmioError> {
+                Err(crate::api::MmioError::WriteFailed)
+            }
+        }
+
+        let mut mmio = NoMmio;
+        let config = CoreConfig::default();
+
+        let outcome = step_one(&mut state, &mut mmio, &config);
+
+        assert!(matches!(
+            outcome,
+            StepOutcome::Fault {
+                cause: crate::fault::FaultCode::BudgetOverrun
+            }
+        ));
+        assert_eq!(
+            state.run_state,
+            RunState::FaultLatched(crate::fault::FaultCode::BudgetOverrun)
+        );
+    }
+
+    #[test]
+    fn ewait_with_empty_queue_keeps_pc() {
+        let mut state = CoreState::default();
+        state.memory[0x0000] = 0xA0;
+        state.memory[0x0001] = 0x00;
+
+        struct NoMmio;
+        impl MmioBus for NoMmio {
+            fn read16(&mut self, _addr: u16) -> Result<u16, crate::api::MmioError> {
+                Err(crate::api::MmioError::ReadFailed)
+            }
+            fn write16(
+                &mut self,
+                _addr: u16,
+                _value: u16,
+            ) -> Result<crate::api::MmioWriteResult, crate::api::MmioError> {
+                Err(crate::api::MmioError::WriteFailed)
+            }
+        }
+
+        let mut mmio = NoMmio;
+        let config = CoreConfig::default();
+
+        let outcome = step_one(&mut state, &mut mmio, &config);
+
+        assert!(matches!(outcome, StepOutcome::Retired { cycles: 1 }));
+        assert_eq!(state.arch.pc(), 0x0000);
+    }
+
+    #[test]
+    fn ewait_with_event_advances_pc() {
+        let mut state = CoreState::default();
+        state.event_queue.events[0] = 0x42;
+        state.event_queue.len = 1;
+        state.memory[0x0000] = 0xA0;
+        state.memory[0x0001] = 0x00;
+
+        struct NoMmio;
+        impl MmioBus for NoMmio {
+            fn read16(&mut self, _addr: u16) -> Result<u16, crate::api::MmioError> {
+                Err(crate::api::MmioError::ReadFailed)
+            }
+            fn write16(
+                &mut self,
+                _addr: u16,
+                _value: u16,
+            ) -> Result<crate::api::MmioWriteResult, crate::api::MmioError> {
+                Err(crate::api::MmioError::WriteFailed)
+            }
+        }
+
+        let mut mmio = NoMmio;
+        let config = CoreConfig::default();
+
+        let outcome = step_one(&mut state, &mut mmio, &config);
+
+        assert!(matches!(outcome, StepOutcome::Retired { cycles: 1 }));
+        assert_eq!(state.arch.pc(), 0x0002);
+    }
+
+    #[test]
+    fn step_one_decode_fault_returns_fault_outcome() {
+        let mut state = CoreState::default();
+        state.memory[0x0000] = 0xB0;
+        state.memory[0x0001] = 0x00;
+
+        struct NoMmio;
+        impl MmioBus for NoMmio {
+            fn read16(&mut self, _addr: u16) -> Result<u16, crate::api::MmioError> {
+                Err(crate::api::MmioError::ReadFailed)
+            }
+            fn write16(
+                &mut self,
+                _addr: u16,
+                _value: u16,
+            ) -> Result<crate::api::MmioWriteResult, crate::api::MmioError> {
+                Err(crate::api::MmioError::WriteFailed)
+            }
+        }
+
+        let mut mmio = NoMmio;
+        let config = CoreConfig::default();
+
+        let outcome = step_one(&mut state, &mut mmio, &config);
+
+        assert!(matches!(
+            outcome,
+            StepOutcome::Fault {
+                cause: crate::fault::FaultCode::IllegalEncoding
+            }
+        ));
+    }
+
+    #[test]
+    fn step_one_fault_latched_returns_fault_immediately() {
+        let mut state = CoreState {
+            run_state: RunState::FaultLatched(crate::fault::FaultCode::IllegalEncoding),
+            ..CoreState::default()
+        };
+
+        struct NoMmio;
+        impl MmioBus for NoMmio {
+            fn read16(&mut self, _addr: u16) -> Result<u16, crate::api::MmioError> {
+                unreachable!()
+            }
+            fn write16(
+                &mut self,
+                _addr: u16,
+                _value: u16,
+            ) -> Result<crate::api::MmioWriteResult, crate::api::MmioError> {
+                unreachable!()
+            }
+        }
+
+        let mut mmio = NoMmio;
+        let config = CoreConfig::default();
+
+        let outcome = step_one(&mut state, &mut mmio, &config);
+
+        assert!(matches!(
+            outcome,
+            StepOutcome::Fault {
+                cause: crate::fault::FaultCode::IllegalEncoding
+            }
+        ));
     }
 }
