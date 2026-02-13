@@ -1,61 +1,48 @@
-<script>
+<script lang="ts">
   import { onMount } from 'svelte';
-  
+
   import RegisterView from '$lib/components/RegisterView.svelte';
   import MemoryView from '$lib/components/MemoryView.svelte';
   import DisassemblyView from '$lib/components/DisassemblyView.svelte';
   import LogView from '$lib/components/LogView.svelte';
+  import initWasm, { WasmCore } from './wasm/emulator_wasm.js';
 
-  import { default as initWasmCore } from './wasm/emulator_wasm.js';
-
-  let core;
-  let state = {};
-  let memory = new Uint8Array(65536);
-  let logs = [];
-  let isRunning = false;
+  let state = $state({});
+  let memory = $state.raw(new Uint8Array(65536));
+  let logs = $state([]);
+  let isRunning = $state(false);
   let interval;
-
-  const isProduction = import.meta.env.PROD;
-  const wasmPath = isProduction ? '/wasm/' : './wasm/';
+  let wasm = $state({ core: null });
 
   async function loadWasm() {
-    logs = [...logs, { ts: Date.now(), msg: "Initializing core..." }];
-
     try {
-      const wasmPath = ('/emulator.wasm');
-
-      console.log("Loading WASM from:", wasmPath);
-
-      core = await initWasmCore(wasmPath);
-
-      console.log("WASM Core initialized:", core);
-
-      updateState();
-      logs = [...logs, { ts: Date.now(), msg: "Core initialized." }];
+      await initWasm();
+      wasm.core = new WasmCore();
+      logs = [...logs, { ts: Date.now(), msg: `Core initialized.`}]
     } catch (e) {
-      console.error(e);
+      console.error('Error loading WASM', e);
       logs = [...logs, { ts: Date.now(), msg: `Error: ${e.message}` }];
     }
   }
 
   onMount(() => {
-    loadWasm();
+    loadWasm()
   });
 
   function updateState() {
-    if (!core) return;
+    if (!wasm.core) return;
     try {
-        //state = core.get_state();
-        //memory = core.get_memory();
+      state = wasm.core.get_state();
+      memory = wasm.core.get_memory();
     } catch (e) {
         console.error("State update failed:", e);
     }
   }
 
   function step() {
-    if (!core) return;
+    if (!wasm.core) return;
     try {
-    //  const outcome = core.step();
+      wasm.core.step();
       updateState();
     } catch (e) {
       console.error(e);
@@ -67,7 +54,7 @@
     if (isRunning) return;
     isRunning = true;
     interval = setInterval(() => {
-      if (core) {
+      if (wasm.core) {
         step();
       }
     }, 100);
@@ -80,9 +67,9 @@
   }
 
   function reset() {
-    if (!core) return;
+    if (!wasm.core) return;
     pause();
-    //core.reset();
+    wasm.core.reset();
     updateState();
     logs = [...logs, { ts: Date.now(), msg: "Core reset." }];
   }
@@ -96,7 +83,7 @@
     reader.onload = (evt) => {
       const arrayBuffer = evt.target.result;
       const bytes = new Uint8Array(arrayBuffer);
-      //core.load_program(bytes);
+      wasm.core.load_program(bytes);
       updateState();
       logs = [...logs, { ts: Date.now(), msg: `Loaded ${bytes.length} bytes from ${file.name}` }];
     };
@@ -104,7 +91,7 @@
   }
 </script>
 
-{#if !core}
+{#if !wasm.core}
   <div class="h-screen w-screen flex items-center justify-center bg-terminal-bg text-accent-primary font-mono text-xl animate-pulse">
     > INITIALIZING CORE SYSTEM...
   </div>
@@ -119,21 +106,19 @@
         <button 
           class="px-3 py-1 bg-accent-primary text-black font-bold hover:bg-white hover:text-black rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-xs uppercase tracking-wide"
           onclick={isRunning ? pause : run}
-          disabled={!core}
         >
           {isRunning ? 'PAUSE' : 'RUN'}
         </button>
         <button 
           class="px-3 py-1 border border-terminal-fg hover:bg-white hover:text-black rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-xs uppercase tracking-wide"
           onclick={step}
-          disabled={!core || isRunning}
+          disabled={isRunning}
         >
           STEP
         </button>
         <button 
           class="px-3 py-1 border border-terminal-fg hover:bg-white hover:text-black rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-xs uppercase tracking-wide"
           onclick={reset}
-          disabled={!core}
         >
           RESET
         </button>
