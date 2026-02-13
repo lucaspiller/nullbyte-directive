@@ -1,0 +1,3 @@
+# Technical docs use plain ASCII formatting with hand-aligned
+# tables and indented blocks -- prettier will break them.
+docs/game/technical/
