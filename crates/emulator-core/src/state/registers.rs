@@ -16,6 +16,8 @@ pub const FLAGS_F: u16 = 1 << 5;
 pub const FLAGS_ACTIVE_MASK: u16 = FLAGS_Z | FLAGS_N | FLAGS_C | FLAGS_V | FLAGS_I | FLAGS_F;
 /// Authority-profile default capability mask (`CAP[0..3] = 1`).
 pub const CAP_AUTHORITY_DEFAULT_MASK: u16 = 0x000F;
+/// Restricted-profile default capability mask (all capability bits disabled).
+pub const CAP_RESTRICTED_DEFAULT_MASK: u16 = 0x0000;
 
 /// Architecturally visible general-purpose register identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -177,6 +179,21 @@ impl ArchitecturalState {
     /// Architecturally-visible writes to `CAP` are ignored.
     pub const fn set_cap(&mut self, _value: u16) {}
 
+    /// Core-owned update path for capability policy changes and profile setup.
+    pub const fn set_cap_core_owned(&mut self, value: u16) {
+        self.cap = value;
+    }
+
+    /// Returns `true` when the requested capability bit is enabled in `CAP`.
+    #[must_use]
+    pub const fn capability_enabled(&self, bit_index: u8) -> bool {
+        if bit_index >= 16 {
+            return false;
+        }
+
+        (self.cap & (1_u16 << bit_index)) != 0
+    }
+
     /// Reads the `CAUSE` register.
     #[must_use]
     pub const fn cause(&self) -> u16 {
@@ -206,8 +223,9 @@ impl ArchitecturalState {
 #[cfg(test)]
 mod tests {
     use super::{
-        ArchitecturalState, GeneralRegister, CAP_AUTHORITY_DEFAULT_MASK, FLAGS_ACTIVE_MASK,
-        FLAGS_C, FLAGS_F, FLAGS_I, FLAGS_N, FLAGS_V, FLAGS_Z, GENERAL_REGISTER_COUNT,
+        ArchitecturalState, GeneralRegister, CAP_AUTHORITY_DEFAULT_MASK,
+        CAP_RESTRICTED_DEFAULT_MASK, FLAGS_ACTIVE_MASK, FLAGS_C, FLAGS_F, FLAGS_I, FLAGS_N,
+        FLAGS_V, FLAGS_Z, GENERAL_REGISTER_COUNT,
     };
 
     #[test]
@@ -266,6 +284,23 @@ mod tests {
 
         state.set_cap(u16::MAX);
         assert_eq!(state.cap(), CAP_AUTHORITY_DEFAULT_MASK);
+    }
+
+    #[test]
+    fn cap_core_owned_updates_enable_capability_checks() {
+        let mut state = ArchitecturalState::default();
+
+        state.set_cap_core_owned(CAP_RESTRICTED_DEFAULT_MASK);
+        for bit in 0_u8..=15 {
+            assert!(!state.capability_enabled(bit));
+        }
+        assert!(!state.capability_enabled(16));
+
+        state.set_cap_core_owned(0b0101);
+        assert!(state.capability_enabled(0));
+        assert!(!state.capability_enabled(1));
+        assert!(state.capability_enabled(2));
+        assert!(!state.capability_enabled(3));
     }
 
     #[test]

@@ -4,5 +4,6 @@
 pub mod registers;
 
 pub use registers::{
-    ArchitecturalState, GeneralRegister, CAP_AUTHORITY_DEFAULT_MASK, GENERAL_REGISTER_COUNT,
+    ArchitecturalState, GeneralRegister, CAP_AUTHORITY_DEFAULT_MASK, CAP_RESTRICTED_DEFAULT_MASK,
+    GENERAL_REGISTER_COUNT,
 };

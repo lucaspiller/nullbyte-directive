@@ -2,7 +2,9 @@
 //!
 //! These are intentionally type-only scaffolds for FR-8/9/11/15 and NFR-4.
 
-use crate::{ArchitecturalState, FaultCode};
+use crate::{
+    ArchitecturalState, FaultCode, CAP_AUTHORITY_DEFAULT_MASK, CAP_RESTRICTED_DEFAULT_MASK,
+};
 
 /// Maximum number of pending external events accepted by the core queue.
 pub const EVENT_QUEUE_CAPACITY: usize = 4;
@@ -43,6 +45,17 @@ impl Default for CoreConfig {
     }
 }
 
+impl CoreConfig {
+    /// Returns the profile-specific default capability mask.
+    #[must_use]
+    pub const fn default_capability_mask(&self) -> u16 {
+        match self.profile {
+            CoreProfile::Authority => CAP_AUTHORITY_DEFAULT_MASK,
+            CoreProfile::Restricted => CAP_RESTRICTED_DEFAULT_MASK,
+        }
+    }
+}
+
 /// Public run-state surface exposed to hosts and adapters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
@@ -61,6 +74,8 @@ pub enum RunState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct CoreState {
+    /// Immutable runtime profile controlling baseline capability policy.
+    pub profile: CoreProfile,
     /// Architectural register file and special register block.
     pub arch: ArchitecturalState,
     /// Flat 64 KiB memory image.
@@ -75,23 +90,44 @@ pub struct CoreState {
 
 impl Default for CoreState {
     fn default() -> Self {
+        Self::with_config(&CoreConfig::default())
+    }
+}
+
+impl CoreState {
+    /// Creates a core state using profile-sensitive baseline defaults.
+    #[must_use]
+    pub fn with_config(config: &CoreConfig) -> Self {
+        let mut arch = ArchitecturalState::default();
+        arch.set_cap_core_owned(config.default_capability_mask());
+
         Self {
-            arch: ArchitecturalState::default(),
+            profile: config.profile,
+            arch,
             memory: vec![0; u16::MAX as usize + 1].into_boxed_slice(),
             event_queue: EventQueueSnapshot::default(),
             run_state: RunState::Running,
             latched_fault: None,
         }
     }
-}
 
-impl CoreState {
+    /// Returns `true` when a capability bit is enabled in current state.
+    #[must_use]
+    pub const fn capability_enabled(&self, bit_index: u8) -> bool {
+        self.arch.capability_enabled(bit_index)
+    }
+
     /// Applies canonical reset semantics to the host-visible execution state.
     ///
     /// Reset restores architectural defaults, resumes at ROM entry
     /// (`PC=0x0000`), clears pending events, and clears any latched fault.
     pub fn reset_canonical(&mut self) {
         self.arch = ArchitecturalState::default();
+        let cap_mask = match self.profile {
+            CoreProfile::Authority => CAP_AUTHORITY_DEFAULT_MASK,
+            CoreProfile::Restricted => CAP_RESTRICTED_DEFAULT_MASK,
+        };
+        self.arch.set_cap_core_owned(cap_mask);
         self.event_queue = EventQueueSnapshot::default();
         self.run_state = RunState::Running;
         self.latched_fault = None;
@@ -302,7 +338,10 @@ mod tests {
         CoreConfig, CoreProfile, CoreState, EventEnqueueError, EventQueueSnapshot, RunState,
         SnapshotVersion, DEFAULT_TICK_BUDGET_CYCLES, EVENT_QUEUE_CAPACITY,
     };
-    use crate::{ArchitecturalState, FaultCode, GeneralRegister};
+    use crate::{
+        ArchitecturalState, FaultCode, GeneralRegister, CAP_AUTHORITY_DEFAULT_MASK,
+        CAP_RESTRICTED_DEFAULT_MASK,
+    };
 
     #[test]
     fn default_core_config_matches_prd_contract() {
@@ -346,7 +385,9 @@ mod tests {
     #[test]
     fn core_state_default_allocates_full_address_space() {
         let state = CoreState::default();
+        assert_eq!(state.profile, CoreProfile::Authority);
         assert_eq!(state.memory.len(), u16::MAX as usize + 1);
+        assert_eq!(state.arch.cap(), CAP_AUTHORITY_DEFAULT_MASK);
     }
 
     #[test]
@@ -373,6 +414,26 @@ mod tests {
         assert_eq!(state.run_state, RunState::Running);
         assert!(state.event_queue.is_empty());
         assert!(state.latched_fault.is_none());
+    }
+
+    #[test]
+    fn core_state_with_restricted_profile_uses_restricted_cap_defaults() {
+        let config = CoreConfig {
+            profile: CoreProfile::Restricted,
+            ..CoreConfig::default()
+        };
+        let mut state = CoreState::with_config(&config);
+        assert_eq!(state.profile, CoreProfile::Restricted);
+        assert_eq!(state.arch.cap(), CAP_RESTRICTED_DEFAULT_MASK);
+        assert!(!state.capability_enabled(0));
+        assert!(!state.capability_enabled(15));
+
+        state.arch.set_cap_core_owned(CAP_AUTHORITY_DEFAULT_MASK);
+        assert!(state.capability_enabled(0));
+        state.reset_canonical();
+
+        assert_eq!(state.arch.cap(), CAP_RESTRICTED_DEFAULT_MASK);
+        assert!(!state.capability_enabled(0));
     }
 
     #[test]

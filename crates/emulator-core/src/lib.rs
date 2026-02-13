@@ -11,7 +11,8 @@ pub use api::{
 /// Architectural CPU state model primitives.
 pub mod state;
 pub use state::{
-    ArchitecturalState, GeneralRegister, CAP_AUTHORITY_DEFAULT_MASK, GENERAL_REGISTER_COUNT,
+    ArchitecturalState, GeneralRegister, CAP_AUTHORITY_DEFAULT_MASK, CAP_RESTRICTED_DEFAULT_MASK,
+    GENERAL_REGISTER_COUNT,
 };
 
 /// Deterministic opcode and encoding classification tables.
