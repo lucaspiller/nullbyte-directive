@@ -115,6 +115,26 @@ impl FaultCode {
     }
 }
 
+/// A fault reason containing the fault code and associated metadata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FaultReason {
+    code: FaultCode,
+}
+
+impl FaultReason {
+    /// Creates a new fault reason with the given fault code.
+    #[must_use]
+    pub const fn new(code: FaultCode) -> Self {
+        Self { code }
+    }
+
+    /// Returns the fault code associated with this reason.
+    #[must_use]
+    pub const fn code(self) -> FaultCode {
+        self.code
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{FaultClass, FaultCode};

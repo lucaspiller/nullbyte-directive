@@ -3,11 +3,22 @@
 /// Memory model primitives and fixed region map.
 pub mod memory;
 pub use memory::{
-    decode_memory_region, new_address_space, validate_fetch_access, validate_mmio_alignment,
-    validate_mmio_width, validate_word_alignment, validate_write_access, MemoryRegion,
-    RegionDescriptor, ADDRESS_SPACE_BYTES, DIAG_END, DIAG_START, FIXED_MEMORY_REGIONS, MMIO_END,
-    MMIO_START, RAM_END, RAM_START, RESERVED_END, RESERVED_START, ROM_END, ROM_START,
-    WORD_ACCESS_BYTES,
+    decode_memory_region, new_address_space, read_u16_be, validate_fetch_access,
+    validate_mmio_alignment, validate_mmio_width, validate_word_alignment, validate_write_access,
+    write_u16_be, MemoryRegion, RegionDescriptor, ADDRESS_SPACE_BYTES, DIAG_END, DIAG_START,
+    FIXED_MEMORY_REGIONS, MMIO_END, MMIO_START, RAM_END, RAM_START, RESERVED_END, RESERVED_START,
+    ROM_END, ROM_START, WORD_ACCESS_BYTES,
+};
+
+/// Diagnostics window (DIAG) model and provider trait.
+pub mod diag;
+pub use diag::{
+    DiagCoreFields, DiagProvider, StaticDiagProvider, DIAG_DENIED_WRITE_COUNT_OFFSET,
+    DIAG_FAULT_COUNT_BUDGET_OFFSET, DIAG_FAULT_COUNT_CAPABILITY_OFFSET,
+    DIAG_FAULT_COUNT_DECODE_OFFSET, DIAG_FAULT_COUNT_DISPATCH_OFFSET,
+    DIAG_FAULT_COUNT_EVENT_OFFSET, DIAG_FAULT_COUNT_MEMORY_OFFSET, DIAG_FAULT_COUNT_MMIO_OFFSET,
+    DIAG_INSTRUCTION_COUNT_OFFSET, DIAG_LAST_FAULT_CODE_OFFSET, DIAG_LAST_FAULT_PC_OFFSET,
+    DIAG_LAST_FAULT_TICK_OFFSET,
 };
 
 /// Public host-facing API contract and integration types.
@@ -32,6 +43,11 @@ pub use encoding::{
     classify_opcode, decode_primary_word_op_sub, is_reserved_primary_opcode, OpcodeClass,
     OpcodeEncoding, OPCODE_ENCODING_TABLE,
 };
+
+/// Instruction decode pipeline with field extraction and validation.
+pub mod decoder;
+pub use decoder::{AddressingMode, DecodedInstruction, DecodedOrFault, Decoder, RegisterField};
+
 /// Fault taxonomy types for ISA-visible and runtime escalation faults.
 pub mod fault;
 pub use fault::{FaultClass, FaultCode};
