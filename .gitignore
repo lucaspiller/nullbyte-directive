@@ -3,3 +3,6 @@ docs/archive/*
 
 # Node
 node_modules/
+
+# Rust
+target/
