@@ -3,11 +3,15 @@
 //! These are intentionally type-only scaffolds for FR-8/9/11/15 and NFR-4.
 
 use crate::{
-    ArchitecturalState, FaultCode, CAP_AUTHORITY_DEFAULT_MASK, CAP_RESTRICTED_DEFAULT_MASK,
+    new_address_space, ArchitecturalState, FaultCode, GeneralRegister, RunState,
+    CAP_AUTHORITY_DEFAULT_MASK, CAP_RESTRICTED_DEFAULT_MASK, GENERAL_REGISTER_COUNT,
 };
+use thiserror::Error;
 
 /// Maximum number of pending external events accepted by the core queue.
 pub const EVENT_QUEUE_CAPACITY: usize = 4;
+/// Size in bytes of the flat architectural address space (64 KiB).
+pub use crate::memory::ADDRESS_SPACE_BYTES;
 
 /// Default cycle budget per tick.
 pub const DEFAULT_TICK_BUDGET_CYCLES: u16 = 640;
@@ -56,20 +60,6 @@ impl CoreConfig {
     }
 }
 
-/// Public run-state surface exposed to hosts and adapters.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
-pub enum RunState {
-    /// Ready to execute the next instruction.
-    Running,
-    /// Halted for the remainder of the current tick.
-    HaltedForTick,
-    /// Currently inside a trap/event/fault handler context.
-    HandlerContext,
-    /// Fault is latched and no further progress is possible without reset/import.
-    FaultLatched,
-}
-
 /// Complete host-visible core state snapshot used by stepping APIs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
@@ -84,8 +74,6 @@ pub struct CoreState {
     pub event_queue: EventQueueSnapshot,
     /// Current execution state.
     pub run_state: RunState,
-    /// Latched terminal or recoverable fault, when present.
-    pub latched_fault: Option<FaultCode>,
 }
 
 impl Default for CoreState {
@@ -104,10 +92,9 @@ impl CoreState {
         Self {
             profile: config.profile,
             arch,
-            memory: vec![0; u16::MAX as usize + 1].into_boxed_slice(),
+            memory: new_address_space(),
             event_queue: EventQueueSnapshot::default(),
             run_state: RunState::Running,
-            latched_fault: None,
         }
     }
 
@@ -130,7 +117,6 @@ impl CoreState {
         self.arch.set_cap_core_owned(cap_mask);
         self.event_queue = EventQueueSnapshot::default();
         self.run_state = RunState::Running;
-        self.latched_fault = None;
     }
 }
 
@@ -285,8 +271,183 @@ impl SnapshotVersion {
 pub struct CoreSnapshot {
     /// Snapshot schema version.
     pub version: SnapshotVersion,
-    /// Full host-visible core state.
-    pub state: CoreState,
+    /// Canonical, serialization-safe state payload.
+    pub state: CanonicalStateLayout,
+}
+
+/// Snapshot import/export validation failures for canonical layout conversion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Error)]
+pub enum SnapshotLayoutError {
+    /// Canonical memory payload did not contain exactly 64 KiB.
+    #[error("invalid memory length: expected {expected} bytes, got {actual}")]
+    InvalidMemoryLength {
+        /// Required canonical memory payload size.
+        expected: usize,
+        /// Provided memory payload size.
+        actual: usize,
+    },
+    /// Canonical queue length exceeded fixed queue capacity.
+    #[error("invalid event queue length: {0}")]
+    InvalidEventQueueLength(u8),
+    /// Canonical run-state tag was outside the defined encoding domain.
+    #[error("invalid run-state tag: {0}")]
+    InvalidRunStateTag(u8),
+    /// Canonical fault code was invalid for fault-latched run state.
+    #[error("invalid fault code in canonical state: {0:#04X}")]
+    InvalidFaultCode(u8),
+}
+
+/// Canonical snapshot payload layout with explicit primitive field encoding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+pub struct CanonicalStateLayout {
+    /// Immutable runtime profile controlling baseline capability policy.
+    pub profile: CoreProfile,
+    /// Architectural general-purpose registers (`R0..R7`) in canonical order.
+    pub gpr: [u16; GENERAL_REGISTER_COUNT],
+    /// Program counter.
+    pub pc: u16,
+    /// Stack pointer.
+    pub sp: u16,
+    /// Architecturally active status/control flags.
+    pub flags: u16,
+    /// Tick counter.
+    pub tick: u16,
+    /// Capability bitmask.
+    pub cap: u16,
+    /// Cause register value.
+    pub cause: u16,
+    /// Event-pending register value.
+    pub evp: u16,
+    /// Flat 64 KiB memory image in address order.
+    pub memory: Box<[u8]>,
+    /// Event queue entries in dequeue order.
+    pub event_queue: [u8; EVENT_QUEUE_CAPACITY],
+    /// Number of valid queue entries.
+    pub event_queue_len: u8,
+    /// Run-state encoding tag: `0=Running`, `1=HaltedForTick`,
+    /// `2=HandlerContext`, `3=FaultLatched`.
+    pub run_state_tag: u8,
+    /// Latched fault code (`FaultCode::as_u8`) when `run_state_tag == 3`.
+    pub latched_fault_code: u8,
+}
+
+impl CanonicalStateLayout {
+    const RUN_STATE_RUNNING: u8 = 0;
+    const RUN_STATE_HALTED_FOR_TICK: u8 = 1;
+    const RUN_STATE_HANDLER_CONTEXT: u8 = 2;
+    const RUN_STATE_FAULT_LATCHED: u8 = 3;
+    const NO_LATCHED_FAULT: u8 = 0;
+
+    /// Encodes host-visible core state into canonical snapshot layout.
+    #[must_use]
+    pub fn from_core_state(state: &CoreState) -> Self {
+        let mut gpr = [0; GENERAL_REGISTER_COUNT];
+        for reg in GeneralRegister::ALL {
+            gpr[reg.index()] = state.arch.gpr(reg);
+        }
+
+        let (run_state_tag, latched_fault_code) = match state.run_state {
+            RunState::Running => (Self::RUN_STATE_RUNNING, Self::NO_LATCHED_FAULT),
+            RunState::HaltedForTick => (Self::RUN_STATE_HALTED_FOR_TICK, Self::NO_LATCHED_FAULT),
+            RunState::HandlerContext => (Self::RUN_STATE_HANDLER_CONTEXT, Self::NO_LATCHED_FAULT),
+            RunState::FaultLatched(cause) => (Self::RUN_STATE_FAULT_LATCHED, cause.as_u8()),
+        };
+
+        Self {
+            profile: state.profile,
+            gpr,
+            pc: state.arch.pc(),
+            sp: state.arch.sp(),
+            flags: state.arch.flags(),
+            tick: state.arch.tick(),
+            cap: state.arch.cap(),
+            cause: state.arch.cause(),
+            evp: state.arch.evp(),
+            memory: state.memory.clone(),
+            event_queue: state.event_queue.events,
+            event_queue_len: state.event_queue.len,
+            run_state_tag,
+            latched_fault_code,
+        }
+    }
+
+    /// Decodes canonical layout into host-visible core state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SnapshotLayoutError`] when the canonical payload violates
+    /// deterministic layout invariants.
+    pub fn try_into_core_state(self) -> Result<CoreState, SnapshotLayoutError> {
+        if self.memory.len() != ADDRESS_SPACE_BYTES {
+            return Err(SnapshotLayoutError::InvalidMemoryLength {
+                expected: ADDRESS_SPACE_BYTES,
+                actual: self.memory.len(),
+            });
+        }
+
+        if self.event_queue_len as usize > EVENT_QUEUE_CAPACITY {
+            return Err(SnapshotLayoutError::InvalidEventQueueLength(
+                self.event_queue_len,
+            ));
+        }
+
+        let run_state = match self.run_state_tag {
+            Self::RUN_STATE_RUNNING => RunState::Running,
+            Self::RUN_STATE_HALTED_FOR_TICK => RunState::HaltedForTick,
+            Self::RUN_STATE_HANDLER_CONTEXT => RunState::HandlerContext,
+            Self::RUN_STATE_FAULT_LATCHED => {
+                let cause = FaultCode::from_u8(self.latched_fault_code).ok_or(
+                    SnapshotLayoutError::InvalidFaultCode(self.latched_fault_code),
+                )?;
+                RunState::FaultLatched(cause)
+            }
+            _ => return Err(SnapshotLayoutError::InvalidRunStateTag(self.run_state_tag)),
+        };
+
+        let mut arch = ArchitecturalState::default();
+        for reg in GeneralRegister::ALL {
+            arch.set_gpr(reg, self.gpr[reg.index()]);
+        }
+        arch.set_pc(self.pc);
+        arch.set_sp(self.sp);
+        arch.set_flags(self.flags);
+        arch.set_tick(self.tick);
+        arch.set_cap_core_owned(self.cap);
+        arch.set_cause(self.cause);
+        arch.set_evp_core_owned(self.evp);
+
+        Ok(CoreState {
+            profile: self.profile,
+            arch,
+            memory: self.memory,
+            event_queue: EventQueueSnapshot {
+                events: self.event_queue,
+                len: self.event_queue_len,
+            },
+            run_state,
+        })
+    }
+}
+
+impl CoreSnapshot {
+    /// Builds a canonical snapshot from host-visible state.
+    #[must_use]
+    pub fn from_core_state(version: SnapshotVersion, state: &CoreState) -> Self {
+        Self {
+            version,
+            state: CanonicalStateLayout::from_core_state(state),
+        }
+    }
+
+    /// Converts this snapshot back into host-visible state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SnapshotLayoutError`] when canonical payload validation fails.
+    pub fn try_into_core_state(self) -> Result<CoreState, SnapshotLayoutError> {
+        self.state.try_into_core_state()
+    }
 }
 
 /// Deterministic trace events emitted at step boundaries when enabled.
@@ -335,11 +496,12 @@ pub trait TraceSink {
 #[cfg(test)]
 mod tests {
     use super::{
-        CoreConfig, CoreProfile, CoreState, EventEnqueueError, EventQueueSnapshot, RunState,
-        SnapshotVersion, DEFAULT_TICK_BUDGET_CYCLES, EVENT_QUEUE_CAPACITY,
+        CanonicalStateLayout, CoreConfig, CoreProfile, CoreSnapshot, CoreState, EventEnqueueError,
+        EventQueueSnapshot, SnapshotLayoutError, SnapshotVersion, ADDRESS_SPACE_BYTES,
+        DEFAULT_TICK_BUDGET_CYCLES, EVENT_QUEUE_CAPACITY,
     };
     use crate::{
-        ArchitecturalState, FaultCode, GeneralRegister, CAP_AUTHORITY_DEFAULT_MASK,
+        ArchitecturalState, FaultCode, GeneralRegister, RunState, CAP_AUTHORITY_DEFAULT_MASK,
         CAP_RESTRICTED_DEFAULT_MASK,
     };
 
@@ -386,7 +548,7 @@ mod tests {
     fn core_state_default_allocates_full_address_space() {
         let state = CoreState::default();
         assert_eq!(state.profile, CoreProfile::Authority);
-        assert_eq!(state.memory.len(), u16::MAX as usize + 1);
+        assert_eq!(state.memory.len(), ADDRESS_SPACE_BYTES);
         assert_eq!(state.arch.cap(), CAP_AUTHORITY_DEFAULT_MASK);
     }
 
@@ -404,8 +566,7 @@ mod tests {
             events: [0xAA; EVENT_QUEUE_CAPACITY],
             len: u8::try_from(EVENT_QUEUE_CAPACITY).expect("queue capacity must fit in u8"),
         };
-        state.run_state = RunState::FaultLatched;
-        state.latched_fault = Some(FaultCode::IllegalEncoding);
+        state.run_state = RunState::FaultLatched(FaultCode::IllegalEncoding);
 
         state.reset_canonical();
 
@@ -413,7 +574,22 @@ mod tests {
         assert_eq!(state.arch.pc(), 0x0000);
         assert_eq!(state.run_state, RunState::Running);
         assert!(state.event_queue.is_empty());
-        assert!(state.latched_fault.is_none());
+    }
+
+    #[test]
+    fn run_state_machine_tracks_latched_fault_cause() {
+        let mut state = CoreState {
+            run_state: RunState::FaultLatched(FaultCode::BudgetOverrun),
+            ..CoreState::default()
+        };
+        assert_eq!(
+            state.run_state.latched_fault(),
+            Some(FaultCode::BudgetOverrun)
+        );
+
+        state.reset_canonical();
+        assert_eq!(state.run_state, RunState::Running);
+        assert_eq!(state.run_state.latched_fault(), None);
     }
 
     #[test]
@@ -455,5 +631,66 @@ mod tests {
         let capacity = u8::try_from(super::EVENT_QUEUE_CAPACITY)
             .expect("event queue capacity must fit in queue length field");
         assert_eq!(capacity, 4);
+    }
+
+    #[test]
+    fn canonical_layout_roundtrip_preserves_full_core_state() {
+        let mut state = CoreState {
+            profile: CoreProfile::Restricted,
+            ..CoreState::default()
+        };
+        state.arch.set_gpr(GeneralRegister::R0, 0x1111);
+        state.arch.set_gpr(GeneralRegister::R7, 0x7777);
+        state.arch.set_pc(0x1234);
+        state.arch.set_sp(0xABCD);
+        state.arch.set_flags(0x00FF);
+        state.arch.set_tick(0x0012);
+        state.arch.set_cap_core_owned(0x00A5);
+        state.arch.set_cause(0x00CC);
+        state.arch.set_evp_core_owned(0x00DD);
+        state.memory[0x0000] = 0x42;
+        state.memory[0x9000] = 0x99;
+        state.memory[ADDRESS_SPACE_BYTES - 1] = 0xFE;
+        state.event_queue = EventQueueSnapshot {
+            events: [0x10, 0x20, 0x30, 0x40],
+            len: 3,
+        };
+        state.run_state = RunState::FaultLatched(FaultCode::BudgetOverrun);
+
+        let snapshot = CoreSnapshot::from_core_state(SnapshotVersion::V1, &state);
+        let restored = snapshot
+            .try_into_core_state()
+            .expect("canonical layout should decode");
+
+        assert_eq!(restored, state);
+    }
+
+    #[test]
+    fn canonical_layout_rejects_invalid_memory_length() {
+        let mut layout = CanonicalStateLayout::from_core_state(&CoreState::default());
+        layout.memory = vec![0; ADDRESS_SPACE_BYTES - 1].into_boxed_slice();
+
+        let error = layout
+            .try_into_core_state()
+            .expect_err("invalid memory length must be rejected");
+        assert_eq!(
+            error,
+            SnapshotLayoutError::InvalidMemoryLength {
+                expected: ADDRESS_SPACE_BYTES,
+                actual: ADDRESS_SPACE_BYTES - 1,
+            }
+        );
+    }
+
+    #[test]
+    fn canonical_layout_rejects_invalid_fault_code_for_fault_latched_state() {
+        let mut layout = CanonicalStateLayout::from_core_state(&CoreState::default());
+        layout.run_state_tag = 3;
+        layout.latched_fault_code = 0xFF;
+
+        let error = layout
+            .try_into_core_state()
+            .expect_err("invalid fault code must be rejected");
+        assert_eq!(error, SnapshotLayoutError::InvalidFaultCode(0xFF));
     }
 }

@@ -55,6 +55,12 @@ pub use fault::{FaultClass, FaultCode};
 pub mod timing;
 pub use timing::{cycle_cost, CycleCostKind, CYCLE_COST_TABLE};
 
+/// Instruction execution pipeline.
+pub mod execute;
+pub use execute::{
+    commit_execution, execute_instruction, ExecuteOutcome, ExecuteState, FlagsUpdate,
+};
+
 #[cfg(test)]
 use proptest as _;
 #[cfg(test)]
