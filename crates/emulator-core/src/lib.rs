@@ -3,9 +3,11 @@
 /// Memory model primitives and fixed region map.
 pub mod memory;
 pub use memory::{
-    decode_memory_region, new_address_space, MemoryRegion, RegionDescriptor, ADDRESS_SPACE_BYTES,
-    DIAG_END, DIAG_START, FIXED_MEMORY_REGIONS, MMIO_END, MMIO_START, RAM_END, RAM_START,
-    RESERVED_END, RESERVED_START, ROM_END, ROM_START,
+    decode_memory_region, new_address_space, validate_fetch_access, validate_mmio_alignment,
+    validate_mmio_width, validate_word_alignment, validate_write_access, MemoryRegion,
+    RegionDescriptor, ADDRESS_SPACE_BYTES, DIAG_END, DIAG_START, FIXED_MEMORY_REGIONS, MMIO_END,
+    MMIO_START, RAM_END, RAM_START, RESERVED_END, RESERVED_START, ROM_END, ROM_START,
+    WORD_ACCESS_BYTES,
 };
 
 /// Public host-facing API contract and integration types.
