@@ -1,0 +1,84 @@
+name: PR Traceability Gate
+
+on:
+  pull_request:
+    types:
+      - opened
+      - edited
+      - synchronize
+      - reopened
+
+jobs:
+  traceability:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Validate traceability metadata for implementation changes
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pull = context.payload.pull_request;
+            if (!pull) {
+              core.setFailed("pull_request payload is required");
+              return;
+            }
+
+            const files = await github.paginate(
+              github.rest.pulls.listFiles,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pull.number,
+                per_page: 100,
+              },
+            );
+
+            const implementationTouched = files.some(({ filename }) =>
+              filename.startsWith("crates/emulator-core/src/") ||
+              filename.startsWith("crates/emulator-core/tests/") ||
+              filename.startsWith("crates/emulator-core/fuzz/") ||
+              filename.startsWith("crates/emulator-core/benches/"),
+            );
+
+            if (!implementationTouched) {
+              core.info("No emulator-core implementation files touched; skipping gate.");
+              return;
+            }
+
+            const body = pull.body || "";
+            const requirementIds = body.match(/\b(?:FR|NFR|AC)-\d+[A-Z]?\b/g) || [];
+            const hasMatrixRef = body.includes("docs/emulator/requirement-matrix.md");
+            const hasReqSection = /##\s*Requirement Matrix Links/i.test(body);
+            const hasTestSection = /##\s*Test IDs/i.test(body);
+            const hasTestFiles = /crates\/emulator-core\/tests\/[^\s`]+\.rs/.test(body);
+
+            const errors = [];
+            if (!hasReqSection) {
+              errors.push("Missing `## Requirement Matrix Links` section in PR body.");
+            }
+            if (!hasTestSection) {
+              errors.push("Missing `## Test IDs` section in PR body.");
+            }
+            if (!hasMatrixRef) {
+              errors.push("Missing `docs/emulator/requirement-matrix.md` reference in PR body.");
+            }
+            if (requirementIds.length === 0) {
+              errors.push("Missing requirement/test IDs (expected FR-*, NFR-*, or AC-* tokens).");
+            }
+            if (!hasTestFiles) {
+              errors.push("Missing linked test file path(s) under `crates/emulator-core/tests/*.rs`.");
+            }
+
+            if (errors.length > 0) {
+              core.setFailed(
+                [
+                  "Traceability gate failed for emulator-core implementation changes:",
+                  ...errors.map((error) => `- ${error}`),
+                ].join("\n"),
+              );
+              return;
+            }
+
+            core.info(
+              `Traceability gate passed with IDs: ${Array.from(new Set(requirementIds)).join(", ")}`,
+            );
