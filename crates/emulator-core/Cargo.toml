@@ -1,0 +1,22 @@
+[package]
+name = "emulator-core"
+version = "0.1.0"
+edition = "2021"
+description = "Core emulator for Nullbyte Directive"
+license = "MIT"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "deny"
+rust_2018_idioms = { level = "deny", priority = -1 }
+unused_crate_dependencies = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+cargo = { level = "deny", priority = -1 }
