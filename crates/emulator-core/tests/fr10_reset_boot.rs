@@ -6,6 +6,7 @@ use emulator_core::{
 };
 use proptest as _;
 use rstest as _;
+use serde as _;
 use thiserror as _;
 
 #[test]

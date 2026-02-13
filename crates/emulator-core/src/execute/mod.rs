@@ -30,9 +30,13 @@ pub use helpers::{compute_effective_address, compute_effective_address_with_pc};
 
 use crate::decoder::{AddressingMode, DecodedInstruction, RegisterField};
 use crate::encoding::OpcodeEncoding;
+use crate::memory::{read_u16_be, write_u16_be};
 use crate::state::registers::FLAGS_ACTIVE_MASK;
 use crate::timing::CycleCostKind;
-use crate::{CoreConfig, CoreState, Decoder, GeneralRegister, MmioBus, RunState, StepOutcome};
+use crate::{
+    CoreConfig, CoreState, Decoder, GeneralRegister, MmioBus, RunState, StepOutcome, VEC_EVENT,
+    VEC_FAULT, VEC_TRAP,
+};
 
 /// Outcome of executing a single instruction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,6 +107,14 @@ pub struct ExecuteState {
     pub event_id: Option<u8>,
     /// Whether execution should halt for tick.
     pub halt_for_tick: bool,
+    /// ERET: CAUSE value to restore from stack.
+    pub eret_restore_cause: Option<u16>,
+    /// ERET: FLAGS value to restore from stack.
+    pub eret_restore_flags: Option<u16>,
+    /// ERET: new SP value after popping from stack.
+    pub eret_new_sp: Option<u16>,
+    /// ERET: whether this ERET was executed outside handler context (should fault).
+    pub eret_outside_handler_context: bool,
 }
 
 impl Default for ExecuteState {
@@ -127,6 +139,10 @@ impl Default for ExecuteState {
             event_dispatch_pending: false,
             event_id: None,
             halt_for_tick: false,
+            eret_restore_cause: None,
+            eret_restore_flags: None,
+            eret_new_sp: None,
+            eret_outside_handler_context: false,
         }
     }
 }
@@ -959,7 +975,7 @@ fn execute_eget(
 
 fn execute_eret(
     _instr: &DecodedInstruction,
-    state: &mut CoreState,
+    state: &CoreState,
     exec: &mut ExecuteState,
     next_pc: u16,
 ) {
@@ -968,16 +984,28 @@ fn execute_eret(
     if !matches!(state.run_state, crate::state::RunState::HandlerContext) {
         exec.flags_update = FlagsUpdate::None;
         exec.next_pc = Some(next_pc);
+        exec.eret_outside_handler_context = true;
         return;
     }
 
     let sp = state.arch.sp();
-    let lo = state.memory[usize::from(sp)];
-    let hi = state.memory[usize::from(sp.wrapping_add(1))];
-    let return_pc = u16::from_be_bytes([lo, hi]);
+    let cause_lo = state.memory[usize::from(sp)];
+    let cause_hi = state.memory[usize::from(sp.wrapping_add(1))];
+    let cause = u16::from_be_bytes([cause_lo, cause_hi]);
+    let sp = sp.wrapping_add(2);
+    let flags_lo = state.memory[usize::from(sp)];
+    let flags_hi = state.memory[usize::from(sp.wrapping_add(1))];
+    let flags = u16::from_be_bytes([flags_lo, flags_hi]);
+    let sp = sp.wrapping_add(2);
+    let pc_lo = state.memory[usize::from(sp)];
+    let pc_hi = state.memory[usize::from(sp.wrapping_add(1))];
+    let return_pc = u16::from_be_bytes([pc_lo, pc_hi]);
+    let sp = sp.wrapping_add(2);
 
-    state.arch.set_sp(sp.wrapping_add(2));
     exec.next_pc = Some(return_pc);
+    exec.eret_restore_cause = Some(cause);
+    exec.eret_restore_flags = Some(flags);
+    exec.eret_new_sp = Some(sp);
     exec.flags_update = FlagsUpdate::None;
 }
 
@@ -988,6 +1016,115 @@ const fn compute_nzcv_flags(result: u16, carry: bool, overflow: bool) -> FlagsUp
         carry,
         overflow,
     }
+}
+
+/// Checks if events should be dispatched based on FLAGS.I state.
+///
+/// Returns the dequeued event_id if an event should be dispatched, None otherwise.
+/// Event dispatch only occurs when FLAGS.I (interrupt enable) is set.
+fn check_event_dispatch(state: &mut CoreState) -> Option<u8> {
+    if !state.arch.flag_is_set(0x10) {
+        return None;
+    }
+    state.event_queue.dequeue()
+}
+
+/// Performs the trap dispatch sequence:
+/// 1. Latch cause into CAUSE register
+/// 2. Set R0 with cause value
+/// 3. Push PC, FLAGS, CAUSE to stack
+/// 4. Disable events (FLAGS.I = 0)
+/// 5. Jump to VEC_TRAP
+fn perform_trap_dispatch(state: &mut CoreState, cause: u16) {
+    state.arch.set_cause(cause);
+    state.arch.set_gpr(GeneralRegister::R0, cause);
+    let sp = state.arch.sp().wrapping_sub(2);
+    state.arch.set_sp(sp);
+    let _ = write_u16_be(state.memory.as_mut(), sp, state.arch.pc());
+    let sp = sp.wrapping_sub(2);
+    state.arch.set_sp(sp);
+    let _ = write_u16_be(state.memory.as_mut(), sp, state.arch.flags());
+    let sp = sp.wrapping_sub(2);
+    state.arch.set_sp(sp);
+    let _ = write_u16_be(state.memory.as_mut(), sp, cause);
+    let mut flags = state.arch.flags();
+    flags &= !0x10;
+    state.arch.set_flags(flags);
+    let Ok(handler_pc) = read_u16_be(&state.memory, VEC_TRAP) else {
+        return;
+    };
+    state.arch.set_pc(handler_pc);
+    state.run_state = RunState::HandlerContext;
+}
+
+/// Performs the event dispatch sequence:
+/// 1. Latch event_id into CAUSE register
+/// 2. Set R0 with event_id
+/// 3. Push PC, FLAGS, CAUSE to stack
+/// 4. Disable events (FLAGS.I = 0)
+/// 5. Jump to VEC_EVENT
+fn perform_event_dispatch(state: &mut CoreState, event_id: u8) {
+    state.arch.set_cause(u16::from(event_id));
+    state.arch.set_gpr(GeneralRegister::R0, u16::from(event_id));
+    let sp = state.arch.sp().wrapping_sub(2);
+    state.arch.set_sp(sp);
+    let _ = write_u16_be(state.memory.as_mut(), sp, state.arch.pc());
+    let sp = sp.wrapping_sub(2);
+    state.arch.set_sp(sp);
+    let _ = write_u16_be(state.memory.as_mut(), sp, state.arch.flags());
+    let sp = sp.wrapping_sub(2);
+    state.arch.set_sp(sp);
+    let _ = write_u16_be(state.memory.as_mut(), sp, u16::from(event_id));
+    let mut flags = state.arch.flags();
+    flags &= !0x10;
+    state.arch.set_flags(flags);
+    let Ok(handler_pc) = read_u16_be(&state.memory, VEC_EVENT) else {
+        return;
+    };
+    state.arch.set_pc(handler_pc);
+}
+
+/// Performs the fault dispatch sequence:
+/// 1. Check if already in handler context (double-fault)
+/// 2. Latch fault code into CAUSE register
+/// 3. Set R0 with fault code
+/// 4. Push PC, FLAGS, CAUSE to stack
+/// 5. Disable events (FLAGS.I = 0)
+/// 6. Jump to VEC_FAULT
+///
+/// Returns true if the core should halt due to double-fault or invalid vector.
+fn perform_fault_dispatch(state: &mut CoreState, cause: crate::fault::FaultCode) -> bool {
+    if matches!(state.run_state, RunState::HandlerContext) {
+        state.run_state = RunState::FaultLatched(crate::fault::FaultCode::DoubleFault);
+        return true;
+    }
+    let Ok(fault_pc) = read_u16_be(&state.memory, VEC_FAULT) else {
+        state.run_state = RunState::FaultLatched(crate::fault::FaultCode::InvalidFaultVector);
+        return true;
+    };
+    if fault_pc == 0 || fault_pc >= crate::memory::ROM_END {
+        state.run_state = RunState::FaultLatched(crate::fault::FaultCode::InvalidFaultVector);
+        return true;
+    }
+    state.arch.set_cause(u16::from(cause.as_u8()));
+    state
+        .arch
+        .set_gpr(GeneralRegister::R0, u16::from(cause.as_u8()));
+    let sp = state.arch.sp().wrapping_sub(2);
+    state.arch.set_sp(sp);
+    let _ = write_u16_be(state.memory.as_mut(), sp, state.arch.pc());
+    let sp = sp.wrapping_sub(2);
+    state.arch.set_sp(sp);
+    let _ = write_u16_be(state.memory.as_mut(), sp, state.arch.flags());
+    let sp = sp.wrapping_sub(2);
+    state.arch.set_sp(sp);
+    let _ = write_u16_be(state.memory.as_mut(), sp, u16::from(cause.as_u8()));
+    let mut flags = state.arch.flags();
+    flags &= !0x10;
+    state.arch.set_flags(flags);
+    state.arch.set_pc(fault_pc);
+    state.run_state = RunState::HandlerContext;
+    false
 }
 
 /// Runs a single instruction step with budget enforcement and boundary transitions.
@@ -1027,6 +1164,17 @@ pub fn step_one(state: &mut CoreState, mmio: &mut dyn MmioBus, config: &CoreConf
     let instruction = match fetch_result {
         Ok(instr) => instr,
         Err(cause) => {
+            if matches!(state.run_state, RunState::HandlerContext) {
+                if perform_fault_dispatch(state, cause) {
+                    let fault = state
+                        .run_state
+                        .latched_fault()
+                        .unwrap_or(crate::fault::FaultCode::IllegalEncoding);
+                    return StepOutcome::Fault { cause: fault };
+                }
+                return StepOutcome::Fault { cause };
+            }
+            state.run_state = crate::state::RunState::FaultLatched(cause);
             return StepOutcome::Fault { cause };
         }
     };
@@ -1037,10 +1185,37 @@ pub fn step_one(state: &mut CoreState, mmio: &mut dyn MmioBus, config: &CoreConf
         ExecuteOutcome::Retired { cycles } => {
             commit_execution(state, &exec_state);
 
+            if exec_state.eret_outside_handler_context {
+                state.run_state = crate::state::RunState::FaultLatched(
+                    crate::fault::FaultCode::HandlerContextViolation,
+                );
+                return StepOutcome::Fault {
+                    cause: crate::fault::FaultCode::HandlerContextViolation,
+                };
+            }
+
+            if exec_state.eret_restore_cause.is_some() {
+                if let Some(cause) = exec_state.eret_restore_cause {
+                    state.arch.set_cause(cause);
+                }
+                if let Some(flags) = exec_state.eret_restore_flags {
+                    state.arch.set_flags(flags & FLAGS_ACTIVE_MASK);
+                }
+                if let Some(sp) = exec_state.eret_new_sp {
+                    state.arch.set_sp(sp);
+                }
+                state.run_state = crate::state::RunState::Running;
+            }
+
             let new_tick = state.arch.tick();
             if new_tick >= config.tick_budget_cycles {
                 state.run_state = crate::state::RunState::HaltedForTick;
                 return StepOutcome::HaltedForTick;
+            }
+
+            if let Some(event_id) = check_event_dispatch(state) {
+                perform_event_dispatch(state, event_id);
+                return StepOutcome::EventDispatch { event_id };
             }
 
             StepOutcome::Retired { cycles }
@@ -1052,16 +1227,22 @@ pub fn step_one(state: &mut CoreState, mmio: &mut dyn MmioBus, config: &CoreConf
         }
         ExecuteOutcome::TrapDispatch { cause } => {
             commit_execution(state, &exec_state);
-            state.run_state = crate::state::RunState::HandlerContext;
+            perform_trap_dispatch(state, cause);
             StepOutcome::TrapDispatch { cause }
         }
         ExecuteOutcome::EventDispatch { event_id } => {
             commit_execution(state, &exec_state);
-            state.run_state = crate::state::RunState::HandlerContext;
+            perform_event_dispatch(state, event_id);
             StepOutcome::EventDispatch { event_id }
         }
         ExecuteOutcome::Fault { cause } => {
-            state.run_state = crate::state::RunState::FaultLatched(cause);
+            if perform_fault_dispatch(state, cause) {
+                let fault = state
+                    .run_state
+                    .latched_fault()
+                    .unwrap_or(crate::fault::FaultCode::IllegalEncoding);
+                return StepOutcome::Fault { cause: fault };
+            }
             StepOutcome::Fault { cause }
         }
     }
@@ -1080,6 +1261,7 @@ mod tests {
     use super::*;
     use crate::decoder::Decoder;
     use crate::encoding::OpcodeEncoding;
+    use crate::EventQueueSnapshot;
 
     fn decode_instr(word: u16) -> DecodedInstruction {
         let result = Decoder::decode(word);
@@ -1468,6 +1650,209 @@ mod tests {
             outcome,
             StepOutcome::Fault {
                 cause: crate::fault::FaultCode::IllegalEncoding
+            }
+        ));
+    }
+
+    #[test]
+    fn event_queue_enqueue_and_dequeue_works() {
+        let mut queue = EventQueueSnapshot::default();
+        assert!(queue.is_empty());
+
+        queue.enqueue(0x42).expect("should enqueue");
+        assert_eq!(queue.len, 1);
+        assert!(!queue.is_empty());
+
+        queue.enqueue(0x43).expect("should enqueue");
+        assert_eq!(queue.len, 2);
+
+        let event = queue.dequeue();
+        assert_eq!(event, Some(0x42));
+        assert_eq!(queue.len, 1);
+
+        let event = queue.dequeue();
+        assert_eq!(event, Some(0x43));
+        assert_eq!(queue.len, 0);
+        assert!(queue.is_empty());
+
+        assert!(queue.dequeue().is_none());
+    }
+
+    #[test]
+    fn event_queue_enqueue_full_returns_error() {
+        let mut queue = EventQueueSnapshot::default();
+        queue.enqueue(1).expect("first");
+        queue.enqueue(2).expect("second");
+        queue.enqueue(3).expect("third");
+        queue.enqueue(4).expect("fourth");
+
+        assert!(queue.is_full());
+        assert!(queue.enqueue(5).is_err());
+    }
+
+    #[test]
+    fn event_dispatch_when_interrupts_enabled() {
+        let mut state = CoreState::default();
+        state.event_queue.enqueue(0x42).expect("enqueue event");
+        state.arch.set_flags(0x10);
+        state.memory[0x0000] = 0x00;
+        state.memory[0x0001] = 0x00;
+        state.memory[0x000A] = 0x00;
+        state.memory[0x000B] = 0x30;
+
+        struct NoMmio;
+        impl MmioBus for NoMmio {
+            fn read16(&mut self, _addr: u16) -> Result<u16, crate::api::MmioError> {
+                Err(crate::api::MmioError::ReadFailed)
+            }
+            fn write16(
+                &mut self,
+                _addr: u16,
+                _value: u16,
+            ) -> Result<crate::api::MmioWriteResult, crate::api::MmioError> {
+                Err(crate::api::MmioError::WriteFailed)
+            }
+        }
+
+        let mut mmio = NoMmio;
+        let config = CoreConfig::default();
+
+        let outcome = step_one(&mut state, &mut mmio, &config);
+
+        assert!(matches!(
+            outcome,
+            StepOutcome::EventDispatch { event_id: 0x42 }
+        ));
+        assert_eq!(state.arch.pc(), 0x0030);
+    }
+
+    #[test]
+    fn event_dispatch_skipped_when_interrupts_disabled() {
+        let mut state = CoreState::default();
+        state.event_queue.enqueue(0x42).expect("enqueue event");
+        state.arch.set_flags(0x00);
+        state.memory[0x0000] = 0x00;
+        state.memory[0x0001] = 0x00;
+
+        struct NoMmio;
+        impl MmioBus for NoMmio {
+            fn read16(&mut self, _addr: u16) -> Result<u16, crate::api::MmioError> {
+                Err(crate::api::MmioError::ReadFailed)
+            }
+            fn write16(
+                &mut self,
+                _addr: u16,
+                _value: u16,
+            ) -> Result<crate::api::MmioWriteResult, crate::api::MmioError> {
+                Err(crate::api::MmioError::WriteFailed)
+            }
+        }
+
+        let mut mmio = NoMmio;
+        let config = CoreConfig::default();
+
+        let outcome = step_one(&mut state, &mut mmio, &config);
+
+        assert!(matches!(outcome, StepOutcome::Retired { .. }));
+        assert_eq!(state.event_queue.len, 1);
+    }
+
+    #[test]
+    fn trap_dispatch_sets_handler_context() {
+        let mut state = CoreState::default();
+        state.memory[0x0000] = 0x00;
+        state.memory[0x0001] = 0x18;
+        state.memory[0x0008] = 0x00;
+        state.memory[0x0009] = 0x40;
+
+        struct NoMmio;
+        impl MmioBus for NoMmio {
+            fn read16(&mut self, _addr: u16) -> Result<u16, crate::api::MmioError> {
+                Err(crate::api::MmioError::ReadFailed)
+            }
+            fn write16(
+                &mut self,
+                _addr: u16,
+                _value: u16,
+            ) -> Result<crate::api::MmioWriteResult, crate::api::MmioError> {
+                Err(crate::api::MmioError::WriteFailed)
+            }
+        }
+
+        let mut mmio = NoMmio;
+        let config = CoreConfig::default();
+
+        let outcome = step_one(&mut state, &mut mmio, &config);
+
+        assert!(matches!(outcome, StepOutcome::TrapDispatch { .. }));
+        assert!(matches!(state.run_state, RunState::HandlerContext));
+    }
+
+    #[test]
+    fn eret_outside_handler_context_faults() {
+        let mut state = CoreState::default();
+        state.memory[0x0000] = 0xA0;
+        state.memory[0x0001] = 0x10;
+
+        struct NoMmio;
+        impl MmioBus for NoMmio {
+            fn read16(&mut self, _addr: u16) -> Result<u16, crate::api::MmioError> {
+                Err(crate::api::MmioError::ReadFailed)
+            }
+            fn write16(
+                &mut self,
+                _addr: u16,
+                _value: u16,
+            ) -> Result<crate::api::MmioWriteResult, crate::api::MmioError> {
+                Err(crate::api::MmioError::WriteFailed)
+            }
+        }
+
+        let mut mmio = NoMmio;
+        let config = CoreConfig::default();
+
+        let outcome = step_one(&mut state, &mut mmio, &config);
+
+        assert!(matches!(
+            outcome,
+            StepOutcome::Fault {
+                cause: crate::fault::FaultCode::HandlerContextViolation
+            }
+        ));
+    }
+
+    #[test]
+    fn double_fault_triggers_halt() {
+        let mut state = CoreState {
+            run_state: RunState::HandlerContext,
+            ..CoreState::default()
+        };
+        state.memory[0x0000] = 0xB0;
+        state.memory[0x0001] = 0x00;
+
+        struct NoMmio;
+        impl MmioBus for NoMmio {
+            fn read16(&mut self, _addr: u16) -> Result<u16, crate::api::MmioError> {
+                Err(crate::api::MmioError::ReadFailed)
+            }
+            fn write16(
+                &mut self,
+                _addr: u16,
+                _value: u16,
+            ) -> Result<crate::api::MmioWriteResult, crate::api::MmioError> {
+                Err(crate::api::MmioError::WriteFailed)
+            }
+        }
+
+        let mut mmio = NoMmio;
+        let config = CoreConfig::default();
+
+        let outcome = step_one(&mut state, &mut mmio, &config);
+
+        assert!(matches!(
+            outcome,
+            StepOutcome::Fault {
+                cause: crate::fault::FaultCode::DoubleFault
             }
         ));
     }

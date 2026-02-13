@@ -10,6 +10,14 @@ use thiserror::Error;
 
 /// Maximum number of pending external events accepted by the core queue.
 pub const EVENT_QUEUE_CAPACITY: usize = 4;
+
+/// Vector addresses for dispatch.
+pub const VEC_TRAP: u16 = 0x0008;
+/// Vector address for event dispatch.
+pub const VEC_EVENT: u16 = 0x000A;
+/// Vector address for fault dispatch.
+pub const VEC_FAULT: u16 = 0x000C;
+
 /// Size in bytes of the flat architectural address space (64 KiB).
 pub use crate::memory::ADDRESS_SPACE_BYTES;
 
@@ -141,6 +149,38 @@ impl EventQueueSnapshot {
     #[must_use]
     pub const fn is_full(self) -> bool {
         self.len as usize == EVENT_QUEUE_CAPACITY
+    }
+
+    /// Enqueues an event ID into the FIFO queue.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EventEnqueueError::QueueFull`] when the queue is already at capacity.
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn enqueue(&mut self, event_id: u8) -> Result<(), EventEnqueueError> {
+        if self.is_full() {
+            return Err(EventEnqueueError::QueueFull);
+        }
+        self.events[self.len as usize] = event_id;
+        self.len += 1;
+        Ok(())
+    }
+
+    /// Dequeues and returns the next event ID from the queue front.
+    ///
+    /// Returns `None` if the queue is empty.
+    #[must_use]
+    pub fn dequeue(&mut self) -> Option<u8> {
+        if self.is_empty() {
+            return None;
+        }
+        let event = self.events[0];
+        for i in 0..(self.len as usize - 1) {
+            self.events[i] = self.events[i + 1];
+        }
+        self.events[EVENT_QUEUE_CAPACITY - 1] = 0;
+        self.len = self.len.saturating_sub(1);
+        Some(event)
     }
 }
 

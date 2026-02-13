@@ -27,7 +27,7 @@ pub use api::{
     CanonicalStateLayout, CoreConfig, CoreProfile, CoreSnapshot, CoreState, EventEnqueueError,
     EventQueueSnapshot, MmioBus, MmioError, MmioWriteResult, RunBoundary, RunOutcome,
     SnapshotLayoutError, SnapshotVersion, StepOutcome, TraceEvent, TraceSink,
-    DEFAULT_TICK_BUDGET_CYCLES, EVENT_QUEUE_CAPACITY,
+    DEFAULT_TICK_BUDGET_CYCLES, EVENT_QUEUE_CAPACITY, VEC_EVENT, VEC_FAULT, VEC_TRAP,
 };
 
 /// Architectural CPU state model primitives.
