@@ -2,6 +2,7 @@ use thiserror::Error;
 
 /// Fault classes used for diagnostics aggregation and policy decisions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub enum FaultClass {
     /// Decoder rejected an instruction encoding.
     Decode,
@@ -21,6 +22,7 @@ pub enum FaultClass {
 
 /// Stable fault taxonomy for section 12 semantics and dispatch escalation paths.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Error)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 #[repr(u8)]
 pub enum FaultCode {
     /// Illegal opcode, addressing mode, or encoding field combination.

@@ -15,6 +15,11 @@
 
 ## Implemented Artifacts
 
+- External host API contract scaffold (`CoreConfig`, `CoreState`, `StepOutcome`,
+  `RunOutcome`, `MmioBus`, snapshot and trace surface types) is implemented in
+  `crates/emulator-core/src/api.rs` with baseline contract tests and crate-root
+  re-exports in `crates/emulator-core/src/lib.rs`. This artifact establishes
+  typed integration boundaries for FR-8, FR-9, FR-11, FR-15, and NFR-4.
 - Fault taxonomy scaffold (`FaultCode`, `FaultClass`) is implemented in
   `crates/emulator-core/src/fault.rs` with stable code mapping tests. This
   artifact establishes shared fault language for FR-2, FR-6, FR-13, and NFR-3.
@@ -30,6 +35,28 @@
   `crates/emulator-core/src/state/registers.rs` with coverage for all
   architectural registers. This artifact provides the FR-1 baseline state model
   for later FLAGS/CAP/EVP semantics and reset behavior.
+- FLAGS semantics scaffold (`FLAGS_Z/N/C/V/I/F`, `FLAGS_ACTIVE_MASK`, masked
+  `set_flags`, and bit-level helper methods) is implemented in
+  `crates/emulator-core/src/state/registers.rs` with tests proving bits `6..15`
+  are ignored on write and read as `0`. This artifact advances FR-1 conformance
+  for status/control flag register behavior.
+- CAP semantics scaffold (`CAP_AUTHORITY_DEFAULT_MASK`, default
+  `ArchitecturalState` capability initialization, and read-only architectural
+  `set_cap`) is implemented in `crates/emulator-core/src/state/registers.rs`
+  with tests proving authority-default `CAP[0..3] = 1` and ignored
+  architecturally visible writes. This artifact advances FR-1 and FR-14
+  conformance for baseline capability behavior.
+- EVP semantics scaffold (read-only architectural `set_evp` plus core-owned
+  `set_evp_core_owned` update path) is implemented in
+  `crates/emulator-core/src/state/registers.rs` with tests proving
+  architecturally visible writes are ignored while core event-ownership updates
+  remain effective. This artifact advances FR-1 conformance for event-pending
+  register ownership behavior.
+- Reset semantics scaffold (`CoreState::reset_canonical`) is implemented in
+  `crates/emulator-core/src/api.rs` with tests proving canonical reset restores
+  baseline architectural state (`PC=0x0000`, authority `CAP` defaults), clears
+  event queue and fault latch state, and preserves loaded memory image. This
+  artifact advances FR-10 conformance for reset/boot behavior.
 
 ## Requirement Traceability
 
@@ -43,18 +70,18 @@
 | FR-6  | Dispatch and fault semantics                    | `crates/emulator-core/src/dispatch.rs`, `crates/emulator-core/src/fault.rs`, `crates/emulator-core/src/execute/control.rs`                                                                                                                                             | `crates/emulator-core/tests/fr6_dispatch.rs`, `crates/emulator-core/tests/fr6_handler_context.rs`, `crates/emulator-core/tests/fr6_double_fault.rs`      | Planned     |
 | FR-6A | Commit order contract                           | `crates/emulator-core/src/execute/commit.rs`, `crates/emulator-core/src/execute/pipeline.rs`                                                                                                                                                                           | `crates/emulator-core/tests/fr6a_commit_order.rs`, `crates/emulator-core/tests/fr6a_precise_faults.rs`                                                   | Planned     |
 | FR-7  | Event queue behavior                            | `crates/emulator-core/src/event_queue.rs`, `crates/emulator-core/src/dispatch.rs`                                                                                                                                                                                      | `crates/emulator-core/tests/fr7_event_queue.rs`, `crates/emulator-core/tests/fr7_overflow.rs`                                                            | Planned     |
-| FR-8  | MMIO contract and ordering                      | `crates/emulator-core/src/mmio.rs`, `crates/emulator-core/src/execute/memory_ops.rs`, `crates/emulator-core/src/execute/control.rs`                                                                                                                                    | `crates/emulator-core/tests/fr8_mmio_contract.rs`, `crates/emulator-core/tests/fr8_ordering_sync.rs`                                                     | Planned     |
-| FR-9  | Snapshot and replay primitives                  | `crates/emulator-core/src/snapshot.rs`, `crates/emulator-core/src/replay.rs`, `crates/emulator-core/src/core.rs`                                                                                                                                                       | `crates/emulator-core/tests/fr9_snapshot_roundtrip.rs`, `crates/emulator-core/tests/fr9_replay_determinism.rs`                                           | Planned     |
-| FR-10 | Reset and boot semantics                        | `crates/emulator-core/src/reset.rs`, `crates/emulator-core/src/core.rs`, `crates/emulator-core/src/state/capabilities.rs`                                                                                                                                              | `crates/emulator-core/tests/fr10_reset_boot.rs`                                                                                                          | Planned     |
-| FR-11 | External event injection contract               | `crates/emulator-core/src/api.rs`, `crates/emulator-core/src/event_queue.rs`                                                                                                                                                                                           | `crates/emulator-core/tests/fr11_event_injection.rs`                                                                                                     | Planned     |
+| FR-8  | MMIO contract and ordering                      | `crates/emulator-core/src/api.rs`, `crates/emulator-core/src/mmio.rs`, `crates/emulator-core/src/execute/memory_ops.rs`, `crates/emulator-core/src/execute/control.rs`                                                                                                 | `crates/emulator-core/tests/fr8_mmio_contract.rs`, `crates/emulator-core/tests/fr8_ordering_sync.rs`                                                     | In progress |
+| FR-9  | Snapshot and replay primitives                  | `crates/emulator-core/src/api.rs`, `crates/emulator-core/src/snapshot.rs`, `crates/emulator-core/src/replay.rs`, `crates/emulator-core/src/core.rs`                                                                                                                    | `crates/emulator-core/tests/fr9_snapshot_roundtrip.rs`, `crates/emulator-core/tests/fr9_replay_determinism.rs`                                           | In progress |
+| FR-10 | Reset and boot semantics                        | `crates/emulator-core/src/api.rs`, `crates/emulator-core/src/reset.rs`, `crates/emulator-core/src/core.rs`, `crates/emulator-core/src/state/capabilities.rs`                                                                                                           | `crates/emulator-core/tests/fr10_reset_boot.rs`                                                                                                          | In progress |
+| FR-11 | External event injection contract               | `crates/emulator-core/src/api.rs`, `crates/emulator-core/src/event_queue.rs`                                                                                                                                                                                           | `crates/emulator-core/tests/fr11_event_injection.rs`                                                                                                     | In progress |
 | FR-12 | DIAG window semantics                           | `crates/emulator-core/src/diag/mod.rs`, `crates/emulator-core/src/diag/provider.rs`, `crates/emulator-core/src/fault.rs`                                                                                                                                               | `crates/emulator-core/tests/fr12_diag_window.rs`, `crates/emulator-core/tests/fr12_diag_saturation.rs`                                                   | Planned     |
 | FR-13 | MMIO authorization semantics                    | `crates/emulator-core/src/mmio.rs`, `crates/emulator-core/src/diag/mod.rs`, `crates/emulator-core/src/fault.rs`                                                                                                                                                        | `crates/emulator-core/tests/fr13_mmio_authorization.rs`                                                                                                  | Planned     |
 | FR-14 | Capability-bit enforcement                      | `crates/emulator-core/src/state/capabilities.rs`, `crates/emulator-core/src/execute/capability_checks.rs`                                                                                                                                                              | `crates/emulator-core/tests/fr14_capability_gating.rs`                                                                                                   | Planned     |
-| FR-15 | Run-state and boundary semantics                | `crates/emulator-core/src/run_state.rs`, `crates/emulator-core/src/timing.rs`, `crates/emulator-core/src/execute/control.rs`                                                                                                                                           | `crates/emulator-core/tests/fr15_ewait_halt.rs`, `crates/emulator-core/tests/fr15_boundary_transitions.rs`                                               | Planned     |
+| FR-15 | Run-state and boundary semantics                | `crates/emulator-core/src/api.rs`, `crates/emulator-core/src/run_state.rs`, `crates/emulator-core/src/timing.rs`, `crates/emulator-core/src/execute/control.rs`                                                                                                        | `crates/emulator-core/tests/fr15_ewait_halt.rs`, `crates/emulator-core/tests/fr15_boundary_transitions.rs`                                               | In progress |
 | NFR-1 | Determinism                                     | `crates/emulator-core/src/core.rs`, `crates/emulator-core/src/replay.rs`, `crates/emulator-core/src/timing.rs`                                                                                                                                                         | `crates/emulator-core/tests/nfr1_determinism_cross_run.rs`, `crates/emulator-core/tests/nfr1_determinism_ci.rs`                                          | Planned     |
 | NFR-2 | Performance envelope (post-v0.1)                | `crates/emulator-core/benches/step_throughput.rs`                                                                                                                                                                                                                      | `crates/emulator-core/tests/nfr2_perf_smoke.rs`                                                                                                          | Planned     |
 | NFR-3 | Safety and correctness                          | `crates/emulator-core/src/fault.rs`, `crates/emulator-core/src/decode/decoder.rs`, `crates/emulator-core/fuzz/fuzz_targets/*`                                                                                                                                          | `crates/emulator-core/tests/nfr3_no_panic.rs`, `crates/emulator-core/tests/nfr3_illegal_faults.rs`, `crates/emulator-core/tests/nfr3_property_memory.rs` | Planned     |
-| NFR-4 | Inspectability and trace stability              | `crates/emulator-core/src/trace.rs`, `crates/emulator-core/src/api.rs`                                                                                                                                                                                                 | `crates/emulator-core/tests/nfr4_trace_hooks.rs`, `crates/emulator-core/tests/nfr4_trace_golden.rs`                                                      | Planned     |
+| NFR-4 | Inspectability and trace stability              | `crates/emulator-core/src/api.rs`, `crates/emulator-core/src/trace.rs`                                                                                                                                                                                                 | `crates/emulator-core/tests/nfr4_trace_hooks.rs`, `crates/emulator-core/tests/nfr4_trace_golden.rs`                                                      | In progress |
 
 ## Acceptance Criteria Traceability
 

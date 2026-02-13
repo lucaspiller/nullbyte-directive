@@ -1,5 +1,21 @@
 /// Number of architecturally visible general-purpose registers (`R0..R7`).
 pub const GENERAL_REGISTER_COUNT: usize = 8;
+/// `FLAGS` bit for zero result.
+pub const FLAGS_Z: u16 = 1 << 0;
+/// `FLAGS` bit for negative result.
+pub const FLAGS_N: u16 = 1 << 1;
+/// `FLAGS` bit for carry/borrow.
+pub const FLAGS_C: u16 = 1 << 2;
+/// `FLAGS` bit for signed overflow.
+pub const FLAGS_V: u16 = 1 << 3;
+/// `FLAGS` bit for event enable.
+pub const FLAGS_I: u16 = 1 << 4;
+/// `FLAGS` bit for fault latched.
+pub const FLAGS_F: u16 = 1 << 5;
+/// Mask of architecturally active `FLAGS` bits (`Z/N/C/V/I/F`).
+pub const FLAGS_ACTIVE_MASK: u16 = FLAGS_Z | FLAGS_N | FLAGS_C | FLAGS_V | FLAGS_I | FLAGS_F;
+/// Authority-profile default capability mask (`CAP[0..3] = 1`).
+pub const CAP_AUTHORITY_DEFAULT_MASK: u16 = 0x000F;
 
 /// Architecturally visible general-purpose register identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -53,7 +69,7 @@ impl GeneralRegister {
 }
 
 /// Full architectural register state for the Nullbyte One core.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct ArchitecturalState {
     gpr: [u16; GENERAL_REGISTER_COUNT],
@@ -64,6 +80,21 @@ pub struct ArchitecturalState {
     cap: u16,
     cause: u16,
     evp: u16,
+}
+
+impl Default for ArchitecturalState {
+    fn default() -> Self {
+        Self {
+            gpr: [0; GENERAL_REGISTER_COUNT],
+            pc: 0,
+            sp: 0,
+            flags: 0,
+            tick: 0,
+            cap: CAP_AUTHORITY_DEFAULT_MASK,
+            cause: 0,
+            evp: 0,
+        }
+    }
 }
 
 impl ArchitecturalState {
@@ -108,7 +139,22 @@ impl ArchitecturalState {
 
     /// Writes the `FLAGS` register.
     pub const fn set_flags(&mut self, value: u16) {
-        self.flags = value;
+        self.flags = value & FLAGS_ACTIVE_MASK;
+    }
+
+    /// Returns `true` when a specific `FLAGS` bit is set.
+    #[must_use]
+    pub const fn flag_is_set(&self, flag: u16) -> bool {
+        (self.flags & flag) != 0
+    }
+
+    /// Sets or clears a specific active `FLAGS` bit.
+    pub const fn set_flag(&mut self, flag: u16, enabled: bool) {
+        if enabled {
+            self.flags |= flag & FLAGS_ACTIVE_MASK;
+        } else {
+            self.flags &= !(flag & FLAGS_ACTIVE_MASK);
+        }
     }
 
     /// Reads the `TICK` register.
@@ -128,10 +174,8 @@ impl ArchitecturalState {
         self.cap
     }
 
-    /// Writes the `CAP` register.
-    pub const fn set_cap(&mut self, value: u16) {
-        self.cap = value;
-    }
+    /// Architecturally-visible writes to `CAP` are ignored.
+    pub const fn set_cap(&mut self, _value: u16) {}
 
     /// Reads the `CAUSE` register.
     #[must_use]
@@ -150,15 +194,21 @@ impl ArchitecturalState {
         self.evp
     }
 
-    /// Writes the `EVP` register.
-    pub const fn set_evp(&mut self, value: u16) {
+    /// Architecturally-visible writes to `EVP` are ignored.
+    pub const fn set_evp(&mut self, _value: u16) {}
+
+    /// Core-owned update path for `EVP` (event-pending bitmap ownership model).
+    pub const fn set_evp_core_owned(&mut self, value: u16) {
         self.evp = value;
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ArchitecturalState, GeneralRegister, GENERAL_REGISTER_COUNT};
+    use super::{
+        ArchitecturalState, GeneralRegister, CAP_AUTHORITY_DEFAULT_MASK, FLAGS_ACTIVE_MASK,
+        FLAGS_C, FLAGS_F, FLAGS_I, FLAGS_N, FLAGS_V, FLAGS_Z, GENERAL_REGISTER_COUNT,
+    };
 
     #[test]
     fn register_count_and_decode_match_architecture() {
@@ -193,16 +243,73 @@ mod tests {
         state.set_sp(0xA0B0);
         state.set_flags(0x001F);
         state.set_tick(123);
-        state.set_cap(0x000F);
+        state.set_cap(0xA5A5);
         state.set_cause(0x00AA);
-        state.set_evp(0x00C3);
+        state.set_evp_core_owned(0x00C3);
 
         assert_eq!(state.pc(), 0x0102);
         assert_eq!(state.sp(), 0xA0B0);
         assert_eq!(state.flags(), 0x001F);
         assert_eq!(state.tick(), 123);
-        assert_eq!(state.cap(), 0x000F);
+        assert_eq!(state.cap(), CAP_AUTHORITY_DEFAULT_MASK);
         assert_eq!(state.cause(), 0x00AA);
         assert_eq!(state.evp(), 0x00C3);
+    }
+
+    #[test]
+    fn cap_defaults_to_authority_mask_and_ignores_architectural_writes() {
+        let mut state = ArchitecturalState::default();
+        assert_eq!(state.cap(), CAP_AUTHORITY_DEFAULT_MASK);
+
+        state.set_cap(0);
+        assert_eq!(state.cap(), CAP_AUTHORITY_DEFAULT_MASK);
+
+        state.set_cap(u16::MAX);
+        assert_eq!(state.cap(), CAP_AUTHORITY_DEFAULT_MASK);
+    }
+
+    #[test]
+    fn evp_defaults_to_zero_and_ignores_architectural_writes() {
+        let mut state = ArchitecturalState::default();
+        assert_eq!(state.evp(), 0);
+
+        state.set_evp(0x1234);
+        assert_eq!(state.evp(), 0);
+    }
+
+    #[test]
+    fn evp_core_owned_updates_are_preserved_against_architectural_writes() {
+        let mut state = ArchitecturalState::default();
+
+        state.set_evp_core_owned(0x00C3);
+        assert_eq!(state.evp(), 0x00C3);
+
+        state.set_evp(0xFFFF);
+        assert_eq!(state.evp(), 0x00C3);
+    }
+
+    #[test]
+    fn flags_only_store_active_architectural_bits() {
+        let mut state = ArchitecturalState::default();
+        state.set_flags(u16::MAX);
+
+        assert_eq!(state.flags(), FLAGS_ACTIVE_MASK);
+    }
+
+    #[test]
+    fn flags_individual_bits_can_be_set_and_cleared() {
+        let mut state = ArchitecturalState::default();
+
+        for flag in [FLAGS_Z, FLAGS_N, FLAGS_C, FLAGS_V, FLAGS_I, FLAGS_F] {
+            state.set_flag(flag, true);
+            assert!(state.flag_is_set(flag));
+        }
+
+        for flag in [FLAGS_Z, FLAGS_N, FLAGS_C, FLAGS_V, FLAGS_I, FLAGS_F] {
+            state.set_flag(flag, false);
+            assert!(!state.flag_is_set(flag));
+        }
+
+        assert_eq!(state.flags(), 0);
     }
 }
