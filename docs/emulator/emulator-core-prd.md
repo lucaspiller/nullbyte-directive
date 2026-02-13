@@ -201,8 +201,8 @@ Provide bounded 4-entry FIFO event queue behavior with:
 
 ### FR-8: MMIO Contract
 
-`emulator-core` must expose an abstract MMIO interface (trait) with deterministic
-read/write behavior and explicit error/fault mapping.
+`emulator-core` must expose an abstract MMIO interface (trait) with
+deterministic read/write behavior and explicit error/fault mapping.
 
 This allows server and wasm adapters to plug different device models without
 forking CPU semantics.
@@ -228,7 +228,8 @@ version.
 
 ### FR-10: Reset and Boot Semantics
 
-The core must implement canonical reset state and boot entry behavior, including:
+The core must implement canonical reset state and boot entry behavior,
+including:
 
 - Reset register values (`PC`, `SP`, `FLAGS`, `TICK`, `CAUSE`, `EVP`, `R0..R7`).
 - Authority-profile capability defaults (`CAP` bits).
@@ -268,7 +269,8 @@ integration behavior:
 
 ### FR-14: Capability-Bit Enforcement
 
-The emulator must define behavior for profiles where capability bits are not set:
+The emulator must define behavior for profiles where capability bits are not
+set:
 
 - Optional instruction families and hardware features are gated by `CAP`.
 - Executing a gated feature when disabled must produce deterministic fault
@@ -440,8 +442,8 @@ adapter friendliness.
 ## Acceptance Criteria
 
 1. All implemented instructions pass conformance vectors and edge-case tests.
-2. Deterministic replay test passes across at least two different macOS/Linux
-   CI runners.
+2. Deterministic replay test passes across at least two different macOS/Linux CI
+   runners.
 3. Tick budget and fault semantics match documented behavior for canonical
    scenarios.
 4. No guest input can crash the host process under fuzz stress budget.
@@ -490,7 +492,7 @@ Assumptions:
 - Available host budget: 4 performance cores.
 - Effective host frequency budget: ~16e9 host-cycles/s total.
 - Guest load per emulated core at full activity:
-  - 640 cycles/tick * 100 ticks/s = 64,000 guest-cycles/s.
+  - 640 cycles/tick \* 100 ticks/s = 64,000 guest-cycles/s.
 - Estimated average instruction cost: ~1.7 guest-cycles/instruction.
   - 64,000 / 1.7 = ~37,650 guest-instructions/s/core.
 
@@ -512,8 +514,10 @@ Target selection:
 
 ## Appendix: Requirement Traceability
 
-- ISA, memory, timing, dispatch: `docs/in-game/technical/compute/nullbyte-one-core.md`
-- Authority compute constraints: `docs/in-game/technical/compute/compute-constraints.md`
+- ISA, memory, timing, dispatch:
+  `docs/in-game/technical/compute/nullbyte-one-core.md`
+- Authority compute constraints:
+  `docs/in-game/technical/compute/compute-constraints.md`
 - Simulation and budget profile intent: `docs/design/technical/nullbyte-one.md`
 - Layer boundaries and trust model: `docs/in-game/canon/doctrine.md`
 - Gameplay pressure alignment for compute scarcity:

@@ -354,9 +354,9 @@ context.
 HALT behavior:
 
 HALT retires normally (cost 1), advances PC to PC_next, and then enters halted
-state for the remainder of the current tick. Event arrival does not wake a HALTed
-core mid-tick. At the next tick boundary, the core resumes execution from the
-current PC with a fresh tick budget.
+state for the remainder of the current tick. Event arrival does not wake a
+HALTed core mid-tick. At the next tick boundary, the core resumes execution from
+the current PC with a fresh tick budget.
 
 Permanent halt state can still occur through fault escalation paths (section 10
 budget recovery failure, section 12 double-fault or invalid fault vector). A
