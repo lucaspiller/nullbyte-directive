@@ -1,5 +1,15 @@
 //! Core emulator crate for Nullbyte Directive.
 
+/// Architectural CPU state model primitives.
+pub mod state;
+pub use state::{ArchitecturalState, GeneralRegister, GENERAL_REGISTER_COUNT};
+
+/// Deterministic opcode and encoding classification tables.
+pub mod encoding;
+pub use encoding::{
+    classify_opcode, decode_primary_word_op_sub, is_reserved_primary_opcode, OpcodeClass,
+    OpcodeEncoding, OPCODE_ENCODING_TABLE,
+};
 /// Fault taxonomy types for ISA-visible and runtime escalation faults.
 pub mod fault;
 pub use fault::{FaultClass, FaultCode};
