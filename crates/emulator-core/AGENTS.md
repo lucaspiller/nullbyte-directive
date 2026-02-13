@@ -17,6 +17,8 @@ Run commands from the repository root:
 - `make fmt-check` to verify formatting in CI mode.
 - `make clippy` to run lint checks across all targets with warnings denied.
 - `make test` to run workspace tests.
+- `make coverage` to generate LCOV coverage output (`target/llvm-cov/lcov.info`)
+  when `cargo-llvm-cov` is installed.
 - `make conformance` to run conformance-focused `emulator-core` tests.
 - `make fuzz` to check fuzz harness availability (`cargo-fuzz` required).
 

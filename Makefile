@@ -1,7 +1,7 @@
-.PHONY: help fmt fmt-check clippy test fuzz conformance
+.PHONY: help fmt fmt-check clippy test coverage fuzz conformance
 
 help:
-	@echo "Available targets: fmt fmt-check clippy test fuzz conformance"
+	@echo "Available targets: fmt fmt-check clippy test coverage fuzz conformance"
 
 fmt:
 	cargo fmt --all
@@ -16,6 +16,14 @@ clippy:
 
 test:
 	cargo test --workspace
+
+coverage:
+	@if command -v cargo-llvm-cov >/dev/null 2>&1; then \
+		cargo llvm-cov --workspace --lcov --output-path target/llvm-cov/lcov.info; \
+		echo "Coverage report written to target/llvm-cov/lcov.info"; \
+	else \
+		echo "cargo-llvm-cov is not installed. Install with: cargo install cargo-llvm-cov"; \
+	fi
 
 fuzz:
 	@if command -v cargo-fuzz >/dev/null 2>&1; then \
