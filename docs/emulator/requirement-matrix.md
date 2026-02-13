@@ -16,6 +16,9 @@
 - Fault taxonomy scaffold (`FaultCode`, `FaultClass`) is implemented in
   `crates/emulator-core/src/fault.rs` with stable code mapping tests. This
   artifact establishes shared fault language for FR-2, FR-6, FR-13, and NFR-3.
+- Cycle-cost table artifact (`CycleCostKind`, `CYCLE_COST_TABLE`, `cycle_cost`)
+  is implemented in `crates/emulator-core/src/timing.rs` with table-consumer
+  tests. This artifact establishes a single timing source of truth for FR-5.
 
 ## Requirement Traceability
 
