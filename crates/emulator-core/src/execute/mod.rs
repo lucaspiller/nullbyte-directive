@@ -87,6 +87,8 @@ pub struct ExecuteState {
     pub is_mmio_operation: bool,
     /// Whether this is an MMIO write.
     pub is_mmio_write: bool,
+    /// Whether the MMIO write was denied or errored.
+    pub mmio_write_denied: bool,
     /// Destination register for result.
     pub dest_reg: Option<RegisterField>,
     /// Value to write to destination register.
@@ -129,6 +131,7 @@ impl Default for ExecuteState {
             memory_addr: None,
             is_mmio_operation: false,
             is_mmio_write: false,
+            mmio_write_denied: false,
             dest_reg: None,
             dest_value: None,
             flags_update: FlagsUpdate::None,
@@ -304,6 +307,10 @@ pub fn commit_execution(state: &mut CoreState, exec: &ExecuteState) {
     state
         .arch
         .set_tick(state.arch.tick().wrapping_add(exec.cycles));
+
+    if exec.mmio_write_denied {
+        state.mmio_denied_write_count = state.mmio_denied_write_count.saturating_add(1);
+    }
 }
 
 const fn decoder_register_to_general(field: RegisterField) -> GeneralRegister {
@@ -466,7 +473,15 @@ fn execute_store(
     if matches!(addr_region, crate::memory::MemoryRegion::Mmio) {
         exec.is_mmio_operation = true;
         exec.is_mmio_write = true;
-        let _ = mmio.write16(ea, value);
+        match mmio.write16(ea, value) {
+            Ok(crate::api::MmioWriteResult::Applied) => {}
+            Ok(crate::api::MmioWriteResult::DeniedSuppressed) => {
+                exec.mmio_write_denied = true;
+            }
+            Err(_) => {
+                exec.mmio_write_denied = true;
+            }
+        }
     }
 }
 
@@ -863,7 +878,19 @@ fn execute_mmio_out(
         return;
     };
 
-    let _ = mmio.write16(ea, value);
+    exec.is_mmio_operation = true;
+    exec.is_mmio_write = true;
+    exec.memory_addr = Some(ea);
+
+    match mmio.write16(ea, value) {
+        Ok(crate::api::MmioWriteResult::Applied) => {}
+        Ok(crate::api::MmioWriteResult::DeniedSuppressed) => {
+            exec.mmio_write_denied = true;
+        }
+        Err(_) => {
+            exec.mmio_write_denied = true;
+        }
+    }
 }
 
 fn execute_bitop(
@@ -889,9 +916,12 @@ fn execute_bitop(
 
     let bit = instr.immediate_value.map_or(0, |v| v & 0x0F);
 
-    let Ok(value) = mmio.read16(ea) else {
-        exec.flags_update = FlagsUpdate::None;
-        return;
+    let value = match mmio.read16(ea) {
+        Ok(v) => v,
+        Err(_) => {
+            exec.flags_update = FlagsUpdate::None;
+            return;
+        }
     };
 
     let result = match instr.encoding {
@@ -901,8 +931,20 @@ fn execute_bitop(
         _ => value,
     };
 
+    exec.is_mmio_operation = true;
+
     if matches!(instr.encoding, OpcodeEncoding::Bset | OpcodeEncoding::Bclr) {
-        let _ = mmio.write16(ea, result);
+        exec.is_mmio_write = true;
+        exec.memory_addr = Some(ea);
+        match mmio.write16(ea, result) {
+            Ok(crate::api::MmioWriteResult::Applied) => {}
+            Ok(crate::api::MmioWriteResult::DeniedSuppressed) => {
+                exec.mmio_write_denied = true;
+            }
+            Err(_) => {
+                exec.mmio_write_denied = true;
+            }
+        }
     }
 
     exec.flags_update = FlagsUpdate::UpdateNZ {
@@ -1855,5 +1897,170 @@ mod tests {
                 cause: crate::fault::FaultCode::DoubleFault
             }
         ));
+    }
+
+    #[test]
+    fn mmio_write_denied_increments_counter() {
+        let mut state = CoreState::default();
+        // OUT R0, (R1) - OP=8, SUB=1, RD=0, RA=1, RB=0, AM=0 -> 0x8008
+        state.memory[0x0000] = 0x80;
+        state.memory[0x0001] = 0x08;
+
+        struct DenyMmio;
+        impl MmioBus for DenyMmio {
+            fn read16(&mut self, _addr: u16) -> Result<u16, crate::api::MmioError> {
+                Ok(0)
+            }
+            fn write16(
+                &mut self,
+                _addr: u16,
+                _value: u16,
+            ) -> Result<crate::api::MmioWriteResult, crate::api::MmioError> {
+                Ok(crate::api::MmioWriteResult::DeniedSuppressed)
+            }
+        }
+
+        let mut mmio = DenyMmio;
+        let config = CoreConfig::default();
+
+        assert_eq!(state.mmio_denied_write_count, 0);
+
+        let outcome = step_one(&mut state, &mut mmio, &config);
+
+        assert!(matches!(outcome, StepOutcome::Retired { .. }));
+        assert_eq!(state.mmio_denied_write_count, 1);
+    }
+
+    #[test]
+    fn mmio_write_error_increments_counter() {
+        let mut state = CoreState::default();
+        // OUT R0, (R1) - OP=8, SUB=1, RD=0, RA=1, RB=0, AM=0 -> 0x8008
+        state.memory[0x0000] = 0x80;
+        state.memory[0x0001] = 0x08;
+
+        struct ErrorMmio;
+        impl MmioBus for ErrorMmio {
+            fn read16(&mut self, _addr: u16) -> Result<u16, crate::api::MmioError> {
+                Ok(0)
+            }
+            fn write16(
+                &mut self,
+                _addr: u16,
+                _value: u16,
+            ) -> Result<crate::api::MmioWriteResult, crate::api::MmioError> {
+                Err(crate::api::MmioError::WriteFailed)
+            }
+        }
+
+        let mut mmio = ErrorMmio;
+        let config = CoreConfig::default();
+
+        let outcome = step_one(&mut state, &mut mmio, &config);
+
+        assert!(matches!(outcome, StepOutcome::Retired { .. }));
+        assert_eq!(state.mmio_denied_write_count, 1);
+    }
+
+    #[test]
+    fn mmio_read_error_returns_zero_no_fault() {
+        let mut state = CoreState::default();
+        state.arch.set_gpr(GeneralRegister::R0, 0x1234);
+        // IN R0, (R1) - OP=8, SUB=0, RD=0, RA=1, RB=0, AM=0 -> 0x8000
+        state.memory[0x0000] = 0x80;
+        state.memory[0x0001] = 0x00;
+
+        struct ErrorMmio;
+        impl MmioBus for ErrorMmio {
+            fn read16(&mut self, addr: u16) -> Result<u16, crate::api::MmioError> {
+                if addr == 0xE000 {
+                    Err(crate::api::MmioError::ReadFailed)
+                } else {
+                    Ok(0)
+                }
+            }
+            fn write16(
+                &mut self,
+                _addr: u16,
+                _value: u16,
+            ) -> Result<crate::api::MmioWriteResult, crate::api::MmioError> {
+                Ok(crate::api::MmioWriteResult::Applied)
+            }
+        }
+
+        let mut mmio = ErrorMmio;
+        let config = CoreConfig::default();
+
+        let outcome = step_one(&mut state, &mut mmio, &config);
+
+        assert!(matches!(outcome, StepOutcome::Retired { .. }));
+        assert_eq!(state.arch.gpr(GeneralRegister::R0), 0);
+    }
+
+    #[test]
+    fn mmio_applied_write_does_not_increment_counter() {
+        let mut state = CoreState::default();
+        // OUT R0, (R1) - OP=8, SUB=1, RD=0, RA=1, RB=0, AM=0 -> 0x8008
+        state.memory[0x0000] = 0x80;
+        state.memory[0x0001] = 0x08;
+
+        struct ApplyMmio;
+        impl MmioBus for ApplyMmio {
+            fn read16(&mut self, _addr: u16) -> Result<u16, crate::api::MmioError> {
+                Ok(0)
+            }
+            fn write16(
+                &mut self,
+                _addr: u16,
+                _value: u16,
+            ) -> Result<crate::api::MmioWriteResult, crate::api::MmioError> {
+                Ok(crate::api::MmioWriteResult::Applied)
+            }
+        }
+
+        let mut mmio = ApplyMmio;
+        let config = CoreConfig::default();
+
+        let outcome = step_one(&mut state, &mut mmio, &config);
+
+        assert!(matches!(outcome, StepOutcome::Retired { .. }));
+        assert_eq!(state.mmio_denied_write_count, 0);
+    }
+
+    #[test]
+    fn mmio_strong_ordering_out_visibility_at_commit() {
+        let mut state = CoreState::default();
+        state.arch.set_gpr(GeneralRegister::R0, 0xE000);
+        state.arch.set_gpr(GeneralRegister::R1, 0xE000);
+        // OUT R1, (R0) - OP=8, SUB=1, RD=0, RA=1, RB=0, AM=0 -> 0x8048
+        // Using DirectRegister mode (AM=0) - address is directly in R0
+        state.memory[0x0000] = 0x80;
+        state.memory[0x0001] = 0x48;
+
+        struct TrackingMmio {
+            write_seen: bool,
+        }
+        impl MmioBus for TrackingMmio {
+            fn read16(&mut self, _addr: u16) -> Result<u16, crate::api::MmioError> {
+                Ok(0)
+            }
+            fn write16(
+                &mut self,
+                addr: u16,
+                value: u16,
+            ) -> Result<crate::api::MmioWriteResult, crate::api::MmioError> {
+                if addr == 0xE000 && value == 0xE000 {
+                    self.write_seen = true;
+                }
+                Ok(crate::api::MmioWriteResult::Applied)
+            }
+        }
+
+        let mut mmio = TrackingMmio { write_seen: false };
+        let config = CoreConfig::default();
+
+        let outcome = step_one(&mut state, &mut mmio, &config);
+
+        assert!(matches!(outcome, StepOutcome::Retired { .. }));
+        assert!(mmio.write_seen);
     }
 }

@@ -82,6 +82,8 @@ pub struct CoreState {
     pub event_queue: EventQueueSnapshot,
     /// Current execution state.
     pub run_state: RunState,
+    /// Counter for denied MMIO writes (saturating).
+    pub mmio_denied_write_count: u16,
 }
 
 impl Default for CoreState {
@@ -103,6 +105,7 @@ impl CoreState {
             memory: new_address_space(),
             event_queue: EventQueueSnapshot::default(),
             run_state: RunState::Running,
+            mmio_denied_write_count: 0,
         }
     }
 
@@ -125,6 +128,7 @@ impl CoreState {
         self.arch.set_cap_core_owned(cap_mask);
         self.event_queue = EventQueueSnapshot::default();
         self.run_state = RunState::Running;
+        self.mmio_denied_write_count = 0;
     }
 }
 
@@ -370,6 +374,8 @@ pub struct CanonicalStateLayout {
     pub run_state_tag: u8,
     /// Latched fault code (`FaultCode::as_u8`) when `run_state_tag == 3`.
     pub latched_fault_code: u8,
+    /// Counter for denied MMIO writes.
+    pub mmio_denied_write_count: u16,
 }
 
 impl CanonicalStateLayout {
@@ -409,6 +415,7 @@ impl CanonicalStateLayout {
             event_queue_len: state.event_queue.len,
             run_state_tag,
             latched_fault_code,
+            mmio_denied_write_count: state.mmio_denied_write_count,
         }
     }
 
@@ -466,6 +473,7 @@ impl CanonicalStateLayout {
                 len: self.event_queue_len,
             },
             run_state,
+            mmio_denied_write_count: self.mmio_denied_write_count,
         })
     }
 }
