@@ -1,6 +1,6 @@
 use emulator_core::{
-    disassemble_window, run_one, step_one, CoreConfig, CoreState, MmioBus, MmioError,
-    MmioWriteResult, RunBoundary, RunOutcome, RunState, StepOutcome,
+    disassemble_window, run_one, step_one, CompositeMmio, CoreConfig, CoreState, RunBoundary,
+    RunOutcome, RunState, StepOutcome, Tele7Config, Tele7Peripheral,
 };
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
@@ -78,7 +78,7 @@ impl From<RunOutcome> for WasmRunOutcome {
 pub struct WasmCore {
     state: CoreState,
     config: CoreConfig,
-    mmio: WebMmio,
+    mmio: CompositeMmio,
 }
 
 #[wasm_bindgen]
@@ -88,10 +88,11 @@ impl WasmCore {
     pub fn new() -> Self {
         console_error_panic_hook::set_once();
         let config = CoreConfig::default();
+        let mmio = CompositeMmio::new().with_tele7(Tele7Peripheral::new(Tele7Config::default()));
         Self {
             state: CoreState::with_config(&config),
             config,
-            mmio: WebMmio,
+            mmio,
         }
     }
 
@@ -180,6 +181,54 @@ impl WasmCore {
         let rows = disassemble_window(center_pc, before, after, &self.state.memory);
         serde_wasm_bindgen::to_value(&rows).map_err(|err| JsValue::from_str(&err.to_string()))
     }
+
+    /// Returns the TELE-7 display state for rendering.
+    ///
+    /// Returns a JSON object containing:
+    /// - `enabled`: boolean - display is enabled
+    /// - `pageMapped`: boolean - page buffer is valid
+    /// - `fault`: boolean - device has a fault
+    /// - `blinkPhase`: boolean - current blink phase
+    /// - `origin`: number - scroll origin
+    /// - `borderColor`: number - border color (0-7)
+    /// - `buffer`: array of [high, low] byte pairs (500 words)
+    ///
+    /// # Errors
+    ///
+    /// Returns a JS error value when result serialization fails.
+    pub fn get_tele7_state(&self) -> Result<JsValue, JsValue> {
+        #[derive(Serialize)]
+        #[allow(clippy::struct_excessive_bools)]
+        struct Tele7DisplayState<'a> {
+            enabled: bool,
+            page_mapped: bool,
+            fault: bool,
+            blink_phase: bool,
+            origin: u16,
+            border_color: u8,
+            buffer: &'a [[u8; 2]],
+        }
+
+        let Some(t7) = self.mmio.tele7() else {
+            return Err(JsValue::from_str("TELE-7 not available"));
+        };
+
+        let state = t7.state();
+        let buffer = t7.get_display_buffer(&self.state.memory);
+
+        let display_state = Tele7DisplayState {
+            enabled: state.is_enabled(),
+            page_mapped: state.page_mapped(),
+            fault: false,
+            blink_phase: state.blink_phase(),
+            origin: state.origin(),
+            border_color: state.border_color(),
+            buffer: &buffer,
+        };
+
+        serde_wasm_bindgen::to_value(&display_state)
+            .map_err(|err| JsValue::from_str(&err.to_string()))
+    }
 }
 
 impl Default for WasmCore {
@@ -210,6 +259,7 @@ impl WasmCore {
             RunBoundary::TickBoundary,
         );
         self.state.arch.set_tick(0);
+        self.mmio.tick();
         if matches!(self.state.run_state, RunState::HaltedForTick) {
             self.state.run_state = RunState::Running;
         }
@@ -218,18 +268,6 @@ impl WasmCore {
 
     fn run_internal(&mut self, boundary: RunBoundary) -> WasmRunOutcome {
         run_one(&mut self.state, &mut self.mmio, &self.config, boundary).into()
-    }
-}
-
-struct WebMmio;
-
-impl MmioBus for WebMmio {
-    fn read16(&mut self, _addr: u16) -> Result<u16, MmioError> {
-        Ok(0)
-    }
-
-    fn write16(&mut self, _addr: u16, _value: u16) -> Result<MmioWriteResult, MmioError> {
-        Ok(MmioWriteResult::Applied)
     }
 }
 

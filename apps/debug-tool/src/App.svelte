@@ -5,6 +5,7 @@
   import MemoryView from '$lib/components/MemoryView.svelte';
   import DisassemblyView from '$lib/components/DisassemblyView.svelte';
   import LogView from '$lib/components/LogView.svelte';
+  import Tele7View from '$lib/components/Tele7View.svelte';
   import initWasm, { WasmCore } from './wasm/emulator_wasm.js';
 
   let state = $state({});
@@ -15,6 +16,7 @@
   let interval;
   let wasm = $state({ core: null });
   let lastLoadedProgram = null;
+  let tele7State = $state(null);
 
   const TICK_INTERVAL_MS = 10;
 
@@ -46,6 +48,7 @@
       previousMemory = new Uint8Array(memory);
       state = wasm.core.get_state();
       memory = wasm.core.get_memory();
+      tele7State = wasm.core.get_tele7_state();
     } catch (e) {
         console.error("State update failed:", e);
     }
@@ -234,8 +237,13 @@
     </div>
 
     <!-- Center Column: Memory -->
-    <div class="col-span-6 flex flex-col bg-panel-bg border border-panel-border h-full overflow-hidden">
-      <MemoryView memory={memory} previousMemory={previousMemory} pc={state?.arch?.pc || 0} />
+    <div class="col-span-6 flex flex-col gap-1 bg-panel-bg border border-panel-border h-full overflow-hidden p-1">
+      <div class="flex-1 overflow-hidden">
+        <MemoryView memory={memory} previousMemory={previousMemory} pc={state?.arch?.pc || 0} />
+      </div>
+      <div class="h-48 overflow-hidden">
+        <Tele7View tele7State={tele7State} />
+      </div>
     </div>
 
     <!-- Right Column: Logs / Events -->

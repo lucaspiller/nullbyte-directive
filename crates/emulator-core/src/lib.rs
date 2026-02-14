@@ -67,6 +67,13 @@ pub use execute::{
     ExecuteState, FlagsUpdate,
 };
 
+/// Peripheral devices and MMIO adapters.
+pub mod peripherals;
+pub use peripherals::{
+    CompositeMmio, Tele7Config, Tele7Peripheral, Tele7State, TELE7_BASE, TELE7_END, TELE7_ID,
+    TELE7_VERSION,
+};
+
 #[cfg(test)]
 use proptest as _;
 #[cfg(test)]

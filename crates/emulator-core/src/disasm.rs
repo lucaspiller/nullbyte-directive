@@ -118,6 +118,7 @@ pub fn disassemble_window(
 
     // If we still don't have enough, try to get more forward instructions
     if rows.len() < target_total {
+        #[allow(clippy::option_if_let_else)]
         let mut pc = if let Some(last) = rows.last() {
             last.addr_start.wrapping_add(u16::from(last.len_bytes))
         } else {
