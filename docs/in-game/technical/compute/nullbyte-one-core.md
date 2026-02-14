@@ -78,8 +78,10 @@ Region Range Notes
 
 ---
 
-ROM 0x0000..0x3FFF Code and constant tables RAM 0x4000..0xDFFF Writable storage
-MMIO 0xE000..0xEFFF Device registers DIAG 0xF000..0xF0FF Diagnostics (read-only)
+ROM 0x0000..0x3FFF Code and constant tables
+RAM 0x4000..0xDFFF Writable storage
+MMIO 0xE000..0xEFFF Device registers
+DIAG 0xF000..0xF0FF Diagnostics (read-only)
 Reserved 0xF100..0xFFFF Must not be accessed
 
 Execute policy:
