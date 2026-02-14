@@ -1,48 +1,97 @@
-use emulator_core::{CoreConfig, CoreState, MmioBus, MmioError, MmioWriteResult};
+use emulator_core::{
+    run_one, step_one, CoreConfig, CoreState, MmioBus, MmioError, MmioWriteResult, RunBoundary,
+    RunOutcome, StepOutcome,
+};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
-#[wasm_bindgen]
-extern "C" {
-    #[wasm_bindgen(js_namespace = console)]
-    fn log(s: &str);
-}
-
-macro_rules! console_log {
-    ($($t:tt)*) => (log(&format!($($t)*)))
-}
-
-/// JS-compatible version of StepOutcome
-#[derive(Serialize, Deserialize)]
+/// JS-compatible version of `StepOutcome`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum WasmStepOutcome {
     Retired { cycles: u16 },
     HaltedForTick,
     TrapDispatch { cause: u16 },
     EventDispatch { event_id: u8 },
-    Fault { cause: String },
+    Fault { cause: u8 },
 }
 
-/// JS-compatible version of RunOutcome
-#[derive(Serialize, Deserialize)]
+/// JS-compatible version of `RunOutcome`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WasmRunOutcome {
     pub steps: u32,
     pub final_step: WasmStepOutcome,
+}
+
+/// JS-compatible run boundary selector.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum WasmRunBoundary {
+    #[default]
+    TickBoundary,
+    Halted,
+    Fault,
+}
+
+impl From<StepOutcome> for WasmStepOutcome {
+    fn from(value: StepOutcome) -> Self {
+        match value {
+            StepOutcome::Retired { cycles } => Self::Retired { cycles },
+            StepOutcome::HaltedForTick => Self::HaltedForTick,
+            StepOutcome::TrapDispatch { cause } => Self::TrapDispatch { cause },
+            StepOutcome::EventDispatch { event_id } => Self::EventDispatch { event_id },
+            StepOutcome::Fault { cause } => Self::Fault {
+                cause: cause.as_u8(),
+            },
+        }
+    }
+}
+
+impl From<RunBoundary> for WasmRunBoundary {
+    fn from(value: RunBoundary) -> Self {
+        match value {
+            RunBoundary::TickBoundary => Self::TickBoundary,
+            RunBoundary::Halted => Self::Halted,
+            RunBoundary::Fault => Self::Fault,
+        }
+    }
+}
+
+impl From<WasmRunBoundary> for RunBoundary {
+    fn from(value: WasmRunBoundary) -> Self {
+        match value {
+            WasmRunBoundary::TickBoundary => Self::TickBoundary,
+            WasmRunBoundary::Halted => Self::Halted,
+            WasmRunBoundary::Fault => Self::Fault,
+        }
+    }
+}
+
+impl From<RunOutcome> for WasmRunOutcome {
+    fn from(value: RunOutcome) -> Self {
+        Self {
+            steps: value.steps,
+            final_step: value.final_step.into(),
+        }
+    }
 }
 
 #[wasm_bindgen]
 pub struct WasmCore {
     state: CoreState,
     config: CoreConfig,
+    mmio: WebMmio,
 }
 
 #[wasm_bindgen]
 impl WasmCore {
+    #[must_use]
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
         console_error_panic_hook::set_once();
+        let config = CoreConfig::default();
         Self {
-            state: CoreState::default(),
-            config: CoreConfig::default(),
+            state: CoreState::with_config(&config),
+            config,
+            mmio: WebMmio,
         }
     }
 
@@ -50,69 +99,71 @@ impl WasmCore {
     pub fn load_program(&mut self, program: &[u8]) {
         let len = program.len().min(self.state.memory.len());
         self.state.memory[..len].copy_from_slice(&program[..len]);
-        console_log!("Loaded {} bytes into memory", len);
     }
 
     /// Resets the core to its initial state.
     pub fn reset(&mut self) {
-        self.state = CoreState::default();
+        self.state = CoreState::with_config(&self.config);
     }
 
-    /// Executes a single instruction.
-    /// Returns the step outcome as a JSON object.
-    pub fn step(&mut self) -> JsValue {
-        // TODO: Call emulator_core::step_one when available.
-        // For now, we simulate a NOP retirement to validate the bridge.
-
-        let outcome = WasmStepOutcome::Retired { cycles: 1 };
-
-        // Use public setter/getter for PC
-        let current_pc = self.state.arch.pc();
-        self.state.arch.set_pc(current_pc.wrapping_add(1));
-        self.state
-            .arch
-            .set_tick(self.state.arch.tick().wrapping_add(1));
-
-        serde_wasm_bindgen::to_value(&outcome).unwrap()
+    /// Executes a single instruction and returns the outcome as a JSON object.
+    ///
+    /// # Errors
+    ///
+    /// Returns a JS error value when result serialization fails.
+    pub fn step(&mut self) -> Result<JsValue, JsValue> {
+        let outcome = self.step_internal();
+        serde_wasm_bindgen::to_value(&outcome).map_err(|err| JsValue::from_str(&err.to_string()))
     }
 
-    /// Runs until the specified boundary.
-    /// Returns the run outcome as a JSON object.
-    pub fn run_until(&mut self, _boundary_val: JsValue) -> JsValue {
-        // TODO: Call emulator_core::run_until_boundary when available.
-        // For now, simulate running 1 step.
-
-        // Mock execution
-        let step_outcome = WasmStepOutcome::Retired { cycles: 1 };
-        let current_pc = self.state.arch.pc();
-        self.state.arch.set_pc(current_pc.wrapping_add(1));
-        self.state
-            .arch
-            .set_tick(self.state.arch.tick().wrapping_add(1));
-
-        let outcome = WasmRunOutcome {
-            steps: 1,
-            final_step: step_outcome,
-        };
-
-        serde_wasm_bindgen::to_value(&outcome).unwrap()
+    /// Runs until the supplied boundary and returns the run outcome as JSON.
+    ///
+    /// `boundary_val` accepts serialized `WasmRunBoundary` values, or defaults to
+    /// `TickBoundary` if parsing fails.
+    ///
+    /// # Errors
+    ///
+    /// Returns a JS error value when result serialization fails.
+    pub fn run_until(&mut self, boundary_val: JsValue) -> Result<JsValue, JsValue> {
+        let boundary = serde_wasm_bindgen::from_value::<WasmRunBoundary>(boundary_val)
+            .unwrap_or_default()
+            .into();
+        let outcome = self.run_internal(boundary);
+        serde_wasm_bindgen::to_value(&outcome).map_err(|err| JsValue::from_str(&err.to_string()))
     }
 
     /// Returns the full core state as a JSON object.
-    pub fn get_state(&self) -> JsValue {
-        serde_wasm_bindgen::to_value(&self.state).unwrap()
+    ///
+    /// # Errors
+    ///
+    /// Returns a JS error value when state serialization fails.
+    pub fn get_state(&self) -> Result<JsValue, JsValue> {
+        serde_wasm_bindgen::to_value(&self.state).map_err(|err| JsValue::from_str(&err.to_string()))
     }
 
-    /// Returns the memory contents as a Uint8Array.
-    /// This is more efficient than serializing the whole memory to JSON.
+    /// Returns the memory contents as a `Uint8Array` view into wasm memory.
+    #[must_use]
     pub fn get_memory(&self) -> js_sys::Uint8Array {
-        // Use unsafe block for view into WASM memory (zero-copy)
-        // Ensure memory doesn't resize while this view is held!
-        unsafe { js_sys::Uint8Array::view(&self.state.memory) }
+        js_sys::Uint8Array::from(self.state.memory.as_ref())
     }
 }
 
-// Simple dummy MMIO bus for now
+impl Default for WasmCore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl WasmCore {
+    fn step_internal(&mut self) -> WasmStepOutcome {
+        step_one(&mut self.state, &mut self.mmio, &self.config).into()
+    }
+
+    fn run_internal(&mut self, boundary: RunBoundary) -> WasmRunOutcome {
+        run_one(&mut self.state, &mut self.mmio, &self.config, boundary).into()
+    }
+}
+
 struct WebMmio;
 
 impl MmioBus for WebMmio {
@@ -122,5 +173,33 @@ impl MmioBus for WebMmio {
 
     fn write16(&mut self, _addr: u16, _value: u16) -> Result<MmioWriteResult, MmioError> {
         Ok(MmioWriteResult::Applied)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{WasmCore, WasmRunBoundary, WasmStepOutcome};
+
+    #[test]
+    fn step_executes_loaded_nop_and_advances_pc_tick() {
+        let mut core = WasmCore::new();
+        // NOP uses opcode 0x0 in this encoding table.
+        core.load_program(&[0x00, 0x00]);
+
+        let outcome = core.step_internal();
+        assert_eq!(outcome, WasmStepOutcome::Retired { cycles: 1 });
+        assert_eq!(core.state.arch.pc(), 2);
+        assert_eq!(core.state.arch.tick(), 1);
+    }
+
+    #[test]
+    fn run_until_fault_boundary_reports_fault_for_reserved_opcode() {
+        let mut core = WasmCore::new();
+        // 0xF000 encodes a reserved primary opcode and must fault immediately.
+        core.load_program(&[0xF0, 0x00]);
+
+        let outcome = core.run_internal(WasmRunBoundary::Fault.into());
+        assert_eq!(outcome.steps, 1);
+        assert!(matches!(outcome.final_step, WasmStepOutcome::Fault { .. }));
     }
 }

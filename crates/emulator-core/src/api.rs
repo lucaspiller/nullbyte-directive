@@ -502,6 +502,7 @@ impl CoreSnapshot {
 
 /// Deterministic trace events emitted at step boundaries when enabled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub enum TraceEvent {
     /// Pre-execute event for instruction fetch/decode.
     InstructionStart {
