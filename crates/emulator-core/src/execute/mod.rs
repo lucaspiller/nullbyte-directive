@@ -348,6 +348,18 @@ fn read_register(state: &CoreState, field: Option<RegisterField>) -> Option<u16>
     field.map(|f| state.arch.gpr(decoder_register_to_general(f)))
 }
 
+/// Resolves the B operand for ALU/CMP/Math instructions.
+///
+/// In register mode (AM=000) the B operand comes from R\[SUB\] (encoded in the
+/// Rb field).  In immediate mode (AM=101) the B operand is the 16-bit value
+/// in the extension word.  All other addressing modes fall back to Rb.
+fn resolve_b_operand(instr: &DecodedInstruction, state: &CoreState) -> u16 {
+    match instr.addressing_mode {
+        Some(AddressingMode::Immediate) => instr.immediate_value.unwrap_or(0),
+        _ => read_register(state, instr.rb).unwrap_or(0),
+    }
+}
+
 fn execute_nop(exec: &mut ExecuteState, next_pc: u16) {
     exec.cycles = crate::timing::cycle_cost(CycleCostKind::Nop).unwrap_or(1);
     exec.next_pc = Some(next_pc);
@@ -535,7 +547,7 @@ fn execute_alu(
         return;
     };
 
-    let reg_b = read_register(state, instr.rb).unwrap_or(0);
+    let reg_b = resolve_b_operand(instr, state);
 
     let (result, flags) = match op {
         AluOp::Add => {
@@ -601,7 +613,7 @@ fn execute_cmp(
         return;
     };
 
-    let reg_b = read_register(state, instr.rb).unwrap_or(0);
+    let reg_b = resolve_b_operand(instr, state);
 
     let (result, carry) = reg_a.overflowing_sub(reg_b);
     let overflow = ((reg_a ^ reg_b) & (reg_a ^ result) & 0x8000) != 0;
@@ -646,7 +658,7 @@ fn execute_math(
         return;
     };
 
-    let reg_b = read_register(state, instr.rb).unwrap_or(0);
+    let reg_b = resolve_b_operand(instr, state);
 
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let (result, flags) = match op {
@@ -739,7 +751,15 @@ fn execute_branch(
 
     if taken {
         exec.cycles = crate::timing::cycle_cost(CycleCostKind::BranchTaken).unwrap_or(2);
-        let Some(ea) = compute_effective_address(instr, state) else {
+        // Compute target the same way JMP does: PC-relative for AM=Immediate.
+        let target = match instr.addressing_mode {
+            Some(AddressingMode::Immediate) => {
+                let offset = instr.immediate_value.unwrap_or(0) as i16;
+                Some(next_pc.wrapping_add(offset as u16))
+            }
+            _ => compute_effective_address(instr, state),
+        };
+        let Some(ea) = target else {
             exec.next_pc = Some(next_pc);
             exec.flags_update = FlagsUpdate::None;
             return;
@@ -783,11 +803,34 @@ fn execute_call_or_ret(
     exec: &mut ExecuteState,
     next_pc: u16,
 ) {
-    let Some(target) = read_register(state, instr.ra) else {
+    // RET: AM = DirectRegister (0) with no meaningful operand.
+    // CALL: any other AM (typically Immediate/PC-relative).
+    if matches!(instr.addressing_mode, Some(AddressingMode::DirectRegister)) {
+        // --- RET path ---
         exec.cycles = crate::timing::cycle_cost(CycleCostKind::Ret).unwrap_or(2);
-        let sp = state.arch.sp().wrapping_add(2);
-        state.arch.set_sp(sp);
-        exec.next_pc = Some(state.arch.sp());
+        let sp = state.arch.sp();
+        let lo = state.memory[usize::from(sp)];
+        let hi = state.memory[usize::from(sp.wrapping_add(1))];
+        let return_addr = u16::from_be_bytes([lo, hi]);
+        state.arch.set_sp(sp.wrapping_add(2));
+        exec.next_pc = Some(return_addr);
+        exec.flags_update = FlagsUpdate::None;
+        return;
+    }
+
+    // --- CALL path ---
+    // Compute target the same way JMP does: PC-relative for AM=Immediate,
+    // effective address for all other modes.
+    let target = match instr.addressing_mode {
+        Some(AddressingMode::Immediate) => {
+            let offset = instr.immediate_value.unwrap_or(0) as i16;
+            Some(next_pc.wrapping_add(offset as u16))
+        }
+        _ => compute_effective_address(instr, state),
+    };
+
+    let Some(ea) = target else {
+        exec.next_pc = Some(next_pc);
         exec.flags_update = FlagsUpdate::None;
         return;
     };
@@ -798,7 +841,7 @@ fn execute_call_or_ret(
     exec.memory_addr = Some(sp);
     exec.memory_write_pending = true;
     exec.memory_write_value = Some(next_pc);
-    exec.next_pc = Some(target);
+    exec.next_pc = Some(ea);
     exec.flags_update = FlagsUpdate::None;
 }
 

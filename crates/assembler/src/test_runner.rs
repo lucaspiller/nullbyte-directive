@@ -163,22 +163,18 @@ fn load_binary(state: &mut CoreState, binary: &[u8]) {
 /// roughly 6.4 million cycles.
 const MAX_TICKS_PER_BLOCK: u32 = 10_000;
 
-/// Returns `true` when the instruction immediately before the current PC is an
-/// explicit HALT (`opcode=0, sub=2`) or an EWAIT-with-empty-queue
-/// (`opcode=0xA, sub=0`).  Both set the `halt_for_tick` flag inside the
-/// emulator, as opposed to budget exhaustion which is a separate code path.
-fn was_explicit_halt_instruction(state: &CoreState) -> bool {
-    let pc = state.arch.pc();
-    let addr = usize::from(pc.wrapping_sub(2));
-    if addr + 1 >= state.memory.len() {
-        return false;
-    }
-    let hi = state.memory[addr];
-    let lo = state.memory[addr + 1];
-    let word = u16::from(hi) << 8 | u16::from(lo);
-    let opcode = (word >> 12) & 0xF;
-    let sub = (word >> 3) & 0x7;
-    (opcode == 0 && sub == 2) || (opcode == 0xA && sub == 0)
+/// Returns `true` when the most recent `HaltedForTick` was caused by an
+/// explicit HALT or EWAIT instruction rather than tick-budget exhaustion.
+///
+/// The distinction is made via TICK: budget exhaustion always leaves
+/// `TICK >= budget`, whereas an explicit HALT retires (cost 1) and then
+/// immediately yields, so TICK stays below the budget in all practical
+/// cases.  The only ambiguous scenario is HALT landing exactly on the
+/// budget boundary (TICK == budget), which is treated conservatively as
+/// budget exhaustion; the next tick will re-encounter the HALT with
+/// TICK < budget.
+fn was_explicit_halt_instruction(state: &CoreState, config: &CoreConfig) -> bool {
+    state.arch.tick() < config.tick_budget_cycles
 }
 
 /// Runs a single test block to the next explicit HALT and evaluates assertions.
@@ -213,7 +209,7 @@ fn run_test_block(
 
         match outcome.final_step {
             StepOutcome::HaltedForTick => {
-                if was_explicit_halt_instruction(state) {
+                if was_explicit_halt_instruction(state, config) {
                     let assertion_results =
                         evaluate_assertions(state, &block.assertions);
                     return TestBlockResult {

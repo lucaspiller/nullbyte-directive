@@ -1,6 +1,6 @@
 use emulator_core::{
     run_one, step_one, CoreConfig, CoreState, MmioBus, MmioError, MmioWriteResult, RunBoundary,
-    RunOutcome, StepOutcome,
+    RunOutcome, RunState, StepOutcome,
 };
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
@@ -116,6 +116,17 @@ impl WasmCore {
         serde_wasm_bindgen::to_value(&outcome).map_err(|err| JsValue::from_str(&err.to_string()))
     }
 
+    /// Executes one complete tick (until tick boundary) and returns the outcome.
+    /// Resets TICK to 0 and transitions from `HaltedForTick` to Running.
+    ///
+    /// # Errors
+    ///
+    /// Returns a JS error value when result serialization fails.
+    pub fn tick(&mut self) -> Result<JsValue, JsValue> {
+        let outcome = self.tick_internal();
+        serde_wasm_bindgen::to_value(&outcome).map_err(|err| JsValue::from_str(&err.to_string()))
+    }
+
     /// Runs until the supplied boundary and returns the run outcome as JSON.
     ///
     /// `boundary_val` accepts serialized `WasmRunBoundary` values, or defaults to
@@ -155,8 +166,31 @@ impl Default for WasmCore {
 }
 
 impl WasmCore {
+    const fn resume_from_halted(&mut self) {
+        if matches!(self.state.run_state, RunState::HaltedForTick) {
+            self.state.arch.set_tick(0);
+            self.state.run_state = RunState::Running;
+        }
+    }
+
     fn step_internal(&mut self) -> WasmStepOutcome {
+        self.resume_from_halted();
         step_one(&mut self.state, &mut self.mmio, &self.config).into()
+    }
+
+    fn tick_internal(&mut self) -> WasmRunOutcome {
+        self.resume_from_halted();
+        let outcome = run_one(
+            &mut self.state,
+            &mut self.mmio,
+            &self.config,
+            RunBoundary::TickBoundary,
+        );
+        self.state.arch.set_tick(0);
+        if matches!(self.state.run_state, RunState::HaltedForTick) {
+            self.state.run_state = RunState::Running;
+        }
+        outcome.into()
     }
 
     fn run_internal(&mut self, boundary: RunBoundary) -> WasmRunOutcome {

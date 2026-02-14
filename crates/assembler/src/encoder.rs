@@ -127,7 +127,13 @@ pub fn encode_instruction(
 
     let (ra, am, extension_word) = match &instr.operand {
         None => (instr.ra.map_or(0, |r| r.0), am::REGISTER_DIRECT, None),
-        Some(Operand::Register(_rb)) => (instr.ra.map_or(0, |r| r.0), am::REGISTER_DIRECT, None),
+        Some(Operand::Register(rb)) => {
+            // For 2-operand instructions (e.g. MOV Rd, Rs), instr.ra is None
+            // and the source register is in the operand.  Fall back to it so
+            // the Ra field is encoded correctly.
+            let ra = instr.ra.map_or(rb.0, |r| r.0);
+            (ra, am::REGISTER_DIRECT, None)
+        }
         Some(Operand::Memory(mem)) => {
             let ra = mem.base.0;
             if let Some(disp) = mem.displacement {
@@ -297,9 +303,12 @@ mod tests {
         let bytes = encode_line(&parsed, &symbols, 0, 1).unwrap();
         assert_eq!(bytes.len(), 2);
         let word = u16::from_be_bytes([bytes[0], bytes[1]]);
-        assert_eq!((word >> 12) & 0xF, 0x1);
-        assert_eq!((word >> 9) & 0x7, 0x0);
+        assert_eq!((word >> 12) & 0xF, 0x1); // opcode = MOV
+        assert_eq!((word >> 9) & 0x7, 0x0); // Rd = R0
+        assert_eq!((word >> 6) & 0x7, 0x1); // Ra = R1 (source register)
         assert_eq!(word & 0x7, u16::from(am::REGISTER_DIRECT));
+        // Should match emulator's expected encoding (0x1040)
+        assert_eq!(word, 0x1040);
     }
 
     #[test]
