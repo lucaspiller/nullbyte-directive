@@ -691,4 +691,360 @@ mod tests {
         assert_eq!((word >> 12) & 0xF, 0x6);
         assert_eq!((word >> 3) & 0x7, 0x7);
     }
+
+    struct OpcodeTestCase {
+        mnemonic: &'static str,
+        source: &'static str,
+        expected_op: u8,
+        expected_sub: u8,
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn encode_all_41_opcodes_with_expected_encoding() {
+        let test_cases: &[OpcodeTestCase] = &[
+            OpcodeTestCase {
+                mnemonic: "NOP",
+                source: "NOP",
+                expected_op: 0x0,
+                expected_sub: 0x0,
+            },
+            OpcodeTestCase {
+                mnemonic: "SYNC",
+                source: "SYNC",
+                expected_op: 0x0,
+                expected_sub: 0x1,
+            },
+            OpcodeTestCase {
+                mnemonic: "HALT",
+                source: "HALT",
+                expected_op: 0x0,
+                expected_sub: 0x2,
+            },
+            OpcodeTestCase {
+                mnemonic: "TRAP",
+                source: "TRAP",
+                expected_op: 0x0,
+                expected_sub: 0x3,
+            },
+            OpcodeTestCase {
+                mnemonic: "SWI",
+                source: "SWI",
+                expected_op: 0x0,
+                expected_sub: 0x4,
+            },
+            OpcodeTestCase {
+                mnemonic: "MOV",
+                source: "MOV R0, R1",
+                expected_op: 0x1,
+                expected_sub: 0x0,
+            },
+            OpcodeTestCase {
+                mnemonic: "LOAD",
+                source: "LOAD R0, [R1]",
+                expected_op: 0x2,
+                expected_sub: 0x0,
+            },
+            OpcodeTestCase {
+                mnemonic: "STORE",
+                source: "STORE R0, [R1]",
+                expected_op: 0x3,
+                expected_sub: 0x0,
+            },
+            OpcodeTestCase {
+                mnemonic: "ADD",
+                source: "ADD R0, R1, R2",
+                expected_op: 0x4,
+                expected_sub: 0x0,
+            },
+            OpcodeTestCase {
+                mnemonic: "SUB",
+                source: "SUB R0, R1, R2",
+                expected_op: 0x4,
+                expected_sub: 0x1,
+            },
+            OpcodeTestCase {
+                mnemonic: "AND",
+                source: "AND R0, R1, R2",
+                expected_op: 0x4,
+                expected_sub: 0x2,
+            },
+            OpcodeTestCase {
+                mnemonic: "OR",
+                source: "OR R0, R1, R2",
+                expected_op: 0x4,
+                expected_sub: 0x3,
+            },
+            OpcodeTestCase {
+                mnemonic: "XOR",
+                source: "XOR R0, R1, R2",
+                expected_op: 0x4,
+                expected_sub: 0x4,
+            },
+            OpcodeTestCase {
+                mnemonic: "SHL",
+                source: "SHL R0, R1, R2",
+                expected_op: 0x4,
+                expected_sub: 0x5,
+            },
+            OpcodeTestCase {
+                mnemonic: "SHR",
+                source: "SHR R0, R1, R2",
+                expected_op: 0x4,
+                expected_sub: 0x6,
+            },
+            OpcodeTestCase {
+                mnemonic: "CMP",
+                source: "CMP R0, R1, R2",
+                expected_op: 0x4,
+                expected_sub: 0x7,
+            },
+            OpcodeTestCase {
+                mnemonic: "MUL",
+                source: "MUL R0, R1, R2",
+                expected_op: 0x5,
+                expected_sub: 0x0,
+            },
+            OpcodeTestCase {
+                mnemonic: "MULH",
+                source: "MULH R0, R1, R2",
+                expected_op: 0x5,
+                expected_sub: 0x1,
+            },
+            OpcodeTestCase {
+                mnemonic: "DIV",
+                source: "DIV R0, R1, R2",
+                expected_op: 0x5,
+                expected_sub: 0x2,
+            },
+            OpcodeTestCase {
+                mnemonic: "MOD",
+                source: "MOD R0, R1, R2",
+                expected_op: 0x5,
+                expected_sub: 0x3,
+            },
+            OpcodeTestCase {
+                mnemonic: "QADD",
+                source: "QADD R0, R1, R2",
+                expected_op: 0x5,
+                expected_sub: 0x4,
+            },
+            OpcodeTestCase {
+                mnemonic: "QSUB",
+                source: "QSUB R0, R1, R2",
+                expected_op: 0x5,
+                expected_sub: 0x5,
+            },
+            OpcodeTestCase {
+                mnemonic: "SCV",
+                source: "SCV R0, R1, R2",
+                expected_op: 0x5,
+                expected_sub: 0x6,
+            },
+            OpcodeTestCase {
+                mnemonic: "BEQ",
+                source: "BEQ #target",
+                expected_op: 0x6,
+                expected_sub: 0x0,
+            },
+            OpcodeTestCase {
+                mnemonic: "BNE",
+                source: "BNE #target",
+                expected_op: 0x6,
+                expected_sub: 0x1,
+            },
+            OpcodeTestCase {
+                mnemonic: "BLT",
+                source: "BLT #target",
+                expected_op: 0x6,
+                expected_sub: 0x2,
+            },
+            OpcodeTestCase {
+                mnemonic: "BLE",
+                source: "BLE #target",
+                expected_op: 0x6,
+                expected_sub: 0x3,
+            },
+            OpcodeTestCase {
+                mnemonic: "BGT",
+                source: "BGT #target",
+                expected_op: 0x6,
+                expected_sub: 0x4,
+            },
+            OpcodeTestCase {
+                mnemonic: "BGE",
+                source: "BGE #target",
+                expected_op: 0x6,
+                expected_sub: 0x5,
+            },
+            OpcodeTestCase {
+                mnemonic: "JMP",
+                source: "JMP #target",
+                expected_op: 0x6,
+                expected_sub: 0x6,
+            },
+            OpcodeTestCase {
+                mnemonic: "CALL",
+                source: "CALL #target",
+                expected_op: 0x6,
+                expected_sub: 0x7,
+            },
+            OpcodeTestCase {
+                mnemonic: "RET",
+                source: "RET",
+                expected_op: 0x6,
+                expected_sub: 0x7,
+            },
+            OpcodeTestCase {
+                mnemonic: "PUSH",
+                source: "PUSH R0",
+                expected_op: 0x7,
+                expected_sub: 0x0,
+            },
+            OpcodeTestCase {
+                mnemonic: "POP",
+                source: "POP R0",
+                expected_op: 0x7,
+                expected_sub: 0x1,
+            },
+            OpcodeTestCase {
+                mnemonic: "IN",
+                source: "IN R0, R1",
+                expected_op: 0x8,
+                expected_sub: 0x0,
+            },
+            OpcodeTestCase {
+                mnemonic: "OUT",
+                source: "OUT R0, R1",
+                expected_op: 0x8,
+                expected_sub: 0x1,
+            },
+            OpcodeTestCase {
+                mnemonic: "BSET",
+                source: "BSET R0, #0x4000",
+                expected_op: 0x9,
+                expected_sub: 0x0,
+            },
+            OpcodeTestCase {
+                mnemonic: "BCLR",
+                source: "BCLR R0, #0x4000",
+                expected_op: 0x9,
+                expected_sub: 0x1,
+            },
+            OpcodeTestCase {
+                mnemonic: "BTEST",
+                source: "BTEST R0, #0x4000",
+                expected_op: 0x9,
+                expected_sub: 0x2,
+            },
+            OpcodeTestCase {
+                mnemonic: "EWAIT",
+                source: "EWAIT",
+                expected_op: 0xA,
+                expected_sub: 0x0,
+            },
+            OpcodeTestCase {
+                mnemonic: "EGET",
+                source: "EGET R0",
+                expected_op: 0xA,
+                expected_sub: 0x1,
+            },
+            OpcodeTestCase {
+                mnemonic: "ERET",
+                source: "ERET",
+                expected_op: 0xA,
+                expected_sub: 0x2,
+            },
+        ];
+
+        assert_eq!(
+            test_cases.len(),
+            42,
+            "Test case count must match mnemonic count (CALL/RET share encoding)"
+        );
+
+        let mut symbols = SymbolTable::new();
+        symbols.insert(
+            "target".to_string(),
+            crate::symbols::Symbol {
+                address: 0x0100,
+                defined_at: 1,
+            },
+        );
+
+        for case in test_cases {
+            let parsed = parse_line(case.source, 1).unwrap_or_else(|e| {
+                panic!(
+                    "Failed to parse '{}' for {}: {:?}",
+                    case.source, case.mnemonic, e
+                )
+            });
+            let bytes = encode_line(&parsed, &symbols, 0, 1).unwrap_or_else(|e| {
+                panic!(
+                    "Failed to encode '{}' for {}: {:?}",
+                    case.source, case.mnemonic, e
+                )
+            });
+
+            let primary = u16::from_be_bytes([bytes[0], bytes[1]]);
+            let actual_op = ((primary >> 12) & 0xF) as u8;
+            let actual_sub = ((primary >> 3) & 0x7) as u8;
+
+            assert_eq!(
+                actual_op, case.expected_op,
+                "{}: OP mismatch for '{}'",
+                case.mnemonic, case.source
+            );
+            assert_eq!(
+                actual_sub, case.expected_sub,
+                "{}: SUB mismatch for '{}'",
+                case.mnemonic, case.source
+            );
+        }
+    }
+
+    #[test]
+    fn register_direct_opcodes_use_am_000() {
+        let register_direct_cases: &[(&str, &str)] = &[
+            ("MOV", "MOV R0, R1"),
+            ("ADD", "ADD R0, R1, R2"),
+            ("SUB", "SUB R0, R1, R2"),
+            ("AND", "AND R0, R1, R2"),
+            ("OR", "OR R0, R1, R2"),
+            ("XOR", "XOR R0, R1, R2"),
+            ("SHL", "SHL R0, R1, R2"),
+            ("SHR", "SHR R0, R1, R2"),
+            ("CMP", "CMP R0, R1, R2"),
+            ("MUL", "MUL R0, R1, R2"),
+            ("MULH", "MULH R0, R1, R2"),
+            ("DIV", "DIV R0, R1, R2"),
+            ("MOD", "MOD R0, R1, R2"),
+            ("QADD", "QADD R0, R1, R2"),
+            ("QSUB", "QSUB R0, R1, R2"),
+            ("SCV", "SCV R0, R1, R2"),
+            ("PUSH", "PUSH R0"),
+            ("POP", "POP R0"),
+            ("IN", "IN R0, R1"),
+            ("OUT", "OUT R0, R1"),
+        ];
+
+        let symbols = SymbolTable::new();
+
+        for (name, source) in register_direct_cases {
+            let parsed = parse_line(source, 1)
+                .unwrap_or_else(|e| panic!("Failed to parse '{source}' for {name}: {e:?}"));
+            let bytes = encode_line(&parsed, &symbols, 0, 1)
+                .unwrap_or_else(|e| panic!("Failed to encode '{source}' for {name}: {e:?}"));
+
+            let primary = u16::from_be_bytes([bytes[0], bytes[1]]);
+            let am = (primary & 0x7) as u8;
+
+            assert_eq!(
+                am,
+                am::REGISTER_DIRECT,
+                "{name}: Expected AM=000 (register direct), got AM={am:03b} for '{source}'"
+            );
+            assert_eq!(bytes.len(), 2, "{name}: Register-direct should be 2 bytes");
+        }
+    }
 }
