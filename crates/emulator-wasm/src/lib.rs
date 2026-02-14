@@ -1,8 +1,5 @@
-use emulator_core::{
-    CoreConfig, CoreProfile, CoreSnapshot, CoreState, MmioBus, MmioError, MmioWriteResult,
-    RunBoundary, RunOutcome, SnapshotVersion, StepOutcome, TraceEvent, TraceSink,
-    DEFAULT_TICK_BUDGET_CYCLES,
-};
+use emulator_core::{CoreConfig, CoreState, MmioBus, MmioError, MmioWriteResult};
+use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
@@ -13,6 +10,23 @@ extern "C" {
 
 macro_rules! console_log {
     ($($t:tt)*) => (log(&format!($($t)*)))
+}
+
+/// JS-compatible version of StepOutcome
+#[derive(Serialize, Deserialize)]
+pub enum WasmStepOutcome {
+    Retired { cycles: u16 },
+    HaltedForTick,
+    TrapDispatch { cause: u16 },
+    EventDispatch { event_id: u8 },
+    Fault { cause: String },
+}
+
+/// JS-compatible version of RunOutcome
+#[derive(Serialize, Deserialize)]
+pub struct WasmRunOutcome {
+    pub steps: u32,
+    pub final_step: WasmStepOutcome,
 }
 
 #[wasm_bindgen]
@@ -50,27 +64,33 @@ impl WasmCore {
         // TODO: Call emulator_core::step_one when available.
         // For now, we simulate a NOP retirement to validate the bridge.
 
-        let outcome = StepOutcome::Retired { cycles: 1 };
+        let outcome = WasmStepOutcome::Retired { cycles: 1 };
 
-        // Simple mock behavior: increment PC to show movement
-        self.state.arch.pc = self.state.arch.pc.wrapping_add(1);
+        // Use public setter/getter for PC
+        let current_pc = self.state.arch.pc();
+        self.state.arch.set_pc(current_pc.wrapping_add(1));
+        self.state
+            .arch
+            .set_tick(self.state.arch.tick().wrapping_add(1));
 
         serde_wasm_bindgen::to_value(&outcome).unwrap()
     }
 
     /// Runs until the specified boundary.
     /// Returns the run outcome as a JSON object.
-    pub fn run_until(&mut self, boundary_val: JsValue) -> JsValue {
+    pub fn run_until(&mut self, _boundary_val: JsValue) -> JsValue {
         // TODO: Call emulator_core::run_until_boundary when available.
         // For now, simulate running 1 step.
 
-        // Deserialize boundary enum from JS (if needed, or just use string/int)
-        // For simplicity in this scaffold, we ignore the boundary and run 1 step.
+        // Mock execution
+        let step_outcome = WasmStepOutcome::Retired { cycles: 1 };
+        let current_pc = self.state.arch.pc();
+        self.state.arch.set_pc(current_pc.wrapping_add(1));
+        self.state
+            .arch
+            .set_tick(self.state.arch.tick().wrapping_add(1));
 
-        let step_outcome = StepOutcome::Retired { cycles: 1 };
-        self.state.arch.pc = self.state.arch.pc.wrapping_add(1);
-
-        let outcome = RunOutcome {
+        let outcome = WasmRunOutcome {
             steps: 1,
             final_step: step_outcome,
         };
@@ -86,6 +106,8 @@ impl WasmCore {
     /// Returns the memory contents as a Uint8Array.
     /// This is more efficient than serializing the whole memory to JSON.
     pub fn get_memory(&self) -> js_sys::Uint8Array {
+        // Use unsafe block for view into WASM memory (zero-copy)
+        // Ensure memory doesn't resize while this view is held!
         unsafe { js_sys::Uint8Array::view(&self.state.memory) }
     }
 }

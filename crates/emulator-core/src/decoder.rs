@@ -213,6 +213,14 @@ impl From<DecodedOrFault> for Result<DecodedInstruction, FaultCode> {
 /// with all fields properly extracted.
 pub struct Decoder;
 
+const fn validates_unused_rd_bits(encoding: OpcodeEncoding) -> bool {
+    matches!(encoding, OpcodeEncoding::Nop)
+}
+
+const fn validates_unused_ra_bits(encoding: OpcodeEncoding) -> bool {
+    matches!(encoding, OpcodeEncoding::Nop)
+}
+
 impl Decoder {
     /// Decodes a 16-bit instruction word.
     ///
@@ -258,6 +266,14 @@ impl Decoder {
         let rd = RegisterField::from_u3(rd_bits);
         let ra = RegisterField::from_u3(ra_bits);
         let rb = RegisterField::from_u3(rb_bits);
+
+        if validates_unused_rd_bits(encoding) && rd_bits != 0 {
+            return DecodedOrFault::Fault(FaultReason::new(FaultCode::IllegalEncoding));
+        }
+
+        if validates_unused_ra_bits(encoding) && ra_bits != 0 {
+            return DecodedOrFault::Fault(FaultReason::new(FaultCode::IllegalEncoding));
+        }
 
         let immediate_value = Some(word & 0x3F);
 
@@ -356,7 +372,7 @@ mod tests {
 
     #[test]
     fn am_010_sign_extension_valid_0x00() {
-        let word = 0x0200u16;
+        let word = 0x0002u16;
         let result = Decoder::decode(word);
         assert!(
             result.instruction().is_some(),
@@ -474,9 +490,18 @@ mod tests {
                                 && (((word >> 8) & 0xFF) != 0xFF)
                         })
                     };
+                    let is_nop_unused_field_violation = {
+                        let (op, sub) = decode_primary_word_op_sub(word);
+                        op == 0
+                            && sub == 0
+                            && ((((word >> 9) & 0x7) != 0) || (((word >> 6) & 0x7) != 0))
+                    };
 
                     assert!(
-                        is_illegal || is_invalid_am || is_sign_ext_problem,
+                        is_illegal
+                            || is_invalid_am
+                            || is_sign_ext_problem
+                            || is_nop_unused_field_violation,
                         "Fault at {word:X} (OP={op}, SUB={sub}, AM={am}) has no valid fault reason"
                     );
                     assert_eq!(

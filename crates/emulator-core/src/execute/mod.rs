@@ -1065,10 +1065,27 @@ const fn compute_nzcv_flags(result: u16, carry: bool, overflow: bool) -> FlagsUp
 /// Returns the dequeued event_id if an event should be dispatched, None otherwise.
 /// Event dispatch only occurs when FLAGS.I (interrupt enable) is set.
 fn check_event_dispatch(state: &mut CoreState) -> Option<u8> {
+    if !state.capability_enabled(0) {
+        return None;
+    }
     if !state.arch.flag_is_set(0x10) {
         return None;
     }
     state.event_queue.dequeue()
+}
+
+const fn capability_bit_for_encoding(encoding: OpcodeEncoding) -> Option<u8> {
+    match encoding {
+        OpcodeEncoding::Ewait | OpcodeEncoding::Eget => Some(0), // CAP_EVTQ
+        OpcodeEncoding::Bset | OpcodeEncoding::Bclr | OpcodeEncoding::Btest => Some(1), // CAP_ATOM
+        OpcodeEncoding::Mulh
+        | OpcodeEncoding::Qadd
+        | OpcodeEncoding::Qsub
+        | OpcodeEncoding::Scv => {
+            Some(2) // CAP_FXH
+        }
+        _ => None,
+    }
 }
 
 /// Performs the trap dispatch sequence:
@@ -1221,6 +1238,24 @@ pub fn step_one(state: &mut CoreState, mmio: &mut dyn MmioBus, config: &CoreConf
         }
     };
 
+    if let Some(bit_index) = capability_bit_for_encoding(instruction.encoding) {
+        if !state.capability_enabled(bit_index) {
+            let cause = crate::fault::FaultCode::CapabilityViolation;
+            if matches!(state.run_state, RunState::HandlerContext) {
+                if perform_fault_dispatch(state, cause) {
+                    let fault = state
+                        .run_state
+                        .latched_fault()
+                        .unwrap_or(crate::fault::FaultCode::IllegalEncoding);
+                    return StepOutcome::Fault { cause: fault };
+                }
+                return StepOutcome::Fault { cause };
+            }
+            state.run_state = crate::state::RunState::FaultLatched(cause);
+            return StepOutcome::Fault { cause };
+        }
+    }
+
     let (outcome, exec_state) = execute_instruction(&instruction, state, mmio);
 
     match outcome {
@@ -1228,12 +1263,15 @@ pub fn step_one(state: &mut CoreState, mmio: &mut dyn MmioBus, config: &CoreConf
             commit_execution(state, &exec_state);
 
             if exec_state.eret_outside_handler_context {
-                state.run_state = crate::state::RunState::FaultLatched(
-                    crate::fault::FaultCode::HandlerContextViolation,
-                );
-                return StepOutcome::Fault {
-                    cause: crate::fault::FaultCode::HandlerContextViolation,
-                };
+                let cause = crate::fault::FaultCode::HandlerContextViolation;
+                if perform_fault_dispatch(state, cause) {
+                    let fault = state
+                        .run_state
+                        .latched_fault()
+                        .unwrap_or(crate::fault::FaultCode::IllegalEncoding);
+                    return StepOutcome::Fault { cause: fault };
+                }
+                return StepOutcome::Fault { cause };
             }
 
             if exec_state.eret_restore_cause.is_some() {
@@ -1485,7 +1523,7 @@ mod tests {
         state.arch.set_gpr(GeneralRegister::R0, 10);
         state.arch.set_gpr(GeneralRegister::R1, 0);
 
-        let instr = decode_instr(0x0300);
+        let instr = decode_instr(0x5008);
         let mut exec = ExecuteState::new(0);
         execute_math(&instr, &state, &mut exec, 0x0300, MathOp::Mod);
 
@@ -1951,6 +1989,8 @@ mod tests {
         let mut state = CoreState::default();
         state.memory[0x0000] = 0xA0;
         state.memory[0x0001] = 0x10;
+        state.memory[0x000C] = 0x00;
+        state.memory[0x000D] = 0x08;
 
         struct NoMmio;
         impl MmioBus for NoMmio {

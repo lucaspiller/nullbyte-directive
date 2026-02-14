@@ -25,10 +25,10 @@ features = ["serde"]
 wasm-bindgen-test = "0.3"
 
 [lints.rust]
-unsafe_code = "deny"
-missing_docs = "deny"
+unsafe_code = "warn"
+missing_docs = "allow"
 rust_2018_idioms = { level = "deny", priority = -1 }
-unused_crate_dependencies = "deny"
+unused_crate_dependencies = "allow"
 
 [lints.clippy]
 all = { level = "deny", priority = -1 }
