@@ -1,7 +1,7 @@
 # emulator-core
 
-`emulator-core` is the correctness-first deterministic virtual CPU implementation
-used by Nullbyte Directive.
+`emulator-core` is the correctness-first deterministic virtual CPU
+implementation used by Nullbyte Directive.
 
 ## Architecture
 
