@@ -45,7 +45,9 @@ jobs:
         run: make test
 
       - name: Replay determinism smoke
-        run: cargo test -p emulator-core deterministic_replay_is_stable_for_identical_inputs -- --exact
+        run:
+          cargo test -p emulator-core
+          deterministic_replay_is_stable_for_identical_inputs -- --exact
 
   determinism-fingerprint:
     name: Determinism Fingerprint (${{ matrix.os }})
@@ -64,7 +66,9 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Generate fingerprint
-        run: cargo run -p emulator-core --example determinism_fingerprint > fingerprint.txt
+        run:
+          cargo run -p emulator-core --example determinism_fingerprint >
+          fingerprint.txt
 
       - name: Upload fingerprint
         uses: actions/upload-artifact@v4
@@ -90,4 +94,58 @@ jobs:
           path: fingerprints/macos
 
       - name: Compare fingerprints
-        run: diff -u fingerprints/linux/fingerprint.txt fingerprints/macos/fingerprint.txt
+        run:
+          diff -u fingerprints/linux/fingerprint.txt
+          fingerprints/macos/fingerprint.txt
+
+  deploy-debug-tool:
+    name: Deploy Debug Tool to GitHub Pages
+    runs-on: ubuntu-latest
+    needs: check
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: yarn
+
+      - name: Install wasm-pack
+        uses: jetli/wasm-pack-action@v0.5.0
+        with:
+          version: "latest"
+
+      - name: Install JavaScript dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Build WASM module
+        run: yarn workspace debug-tool build:wasm
+
+      - name: Build debug-tool
+        run: yarn workspace debug-tool build
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: apps/debug-tool/dist
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
