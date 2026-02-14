@@ -18,3 +18,7 @@ pub mod parser;
 pub mod source;
 /// Symbol table and pass-1 address assignment.
 pub mod symbols;
+/// Inline test format parsing (`n1test` blocks).
+pub mod test_format;
+/// HALT-driven test execution engine.
+pub mod test_runner;

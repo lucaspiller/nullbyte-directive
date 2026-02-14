@@ -12,7 +12,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::parser::{parse_line, Directive, ParsedLine};
-use crate::source::{extract_source, SourceLine};
+use crate::source::{extract_source, SourceLine, TestBlock};
 
 /// An expanded source line with full include chain context.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,6 +22,17 @@ pub struct ExpandedLine {
     /// 1-indexed line number in the original file.
     pub original_line: usize,
     /// Path to the file containing this line.
+    pub file_path: PathBuf,
+    /// Include chain leading to this file (outermost first).
+    pub include_chain: Vec<IncludeEntry>,
+}
+
+/// A test block collected from an included file with include chain context.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpandedTestBlock {
+    /// The test block content.
+    pub block: TestBlock,
+    /// Path to the file containing this block.
     pub file_path: PathBuf,
     /// Include chain leading to this file (outermost first).
     pub include_chain: Vec<IncludeEntry>,
@@ -76,14 +87,19 @@ impl std::fmt::Display for IncludeError {
 
 impl std::error::Error for IncludeError {}
 
-/// Result of include expansion.
-pub type IncludeResult = Result<Vec<ExpandedLine>, IncludeError>;
+/// Result of include expansion, containing both source lines and test blocks.
+pub struct ExpansionResult {
+    /// Expanded source lines in document order.
+    pub lines: Vec<ExpandedLine>,
+    /// Test blocks in document order (ordered by position in the expanded assembly stream).
+    pub test_blocks: Vec<ExpandedTestBlock>,
+}
 
 /// Expands all `.include` directives in a source file.
 ///
 /// This is Pass 0 of the assembler: it recursively processes `.include`
 /// directives and produces a flat list of source lines with full location
-/// tracking.
+/// tracking, plus all `n1test` blocks in document order.
 ///
 /// # Arguments
 ///
@@ -95,17 +111,23 @@ pub type IncludeResult = Result<Vec<ExpandedLine>, IncludeError>;
 /// - The file cannot be read
 /// - A circular include is detected
 /// - An included file does not exist
-pub fn expand_includes(root_path: &Path) -> IncludeResult {
+pub fn expand_includes(root_path: &Path) -> Result<ExpansionResult, IncludeError> {
     let mut visited = HashSet::new();
     let mut include_chain = Vec::new();
-    expand_includes_recursive(root_path, &mut visited, &mut include_chain)
+    let mut result = ExpansionResult {
+        lines: Vec::new(),
+        test_blocks: Vec::new(),
+    };
+    expand_includes_recursive(root_path, &mut visited, &mut include_chain, &mut result)?;
+    Ok(result)
 }
 
 fn expand_includes_recursive(
     path: &Path,
     visited: &mut HashSet<PathBuf>,
     include_chain: &mut Vec<IncludeEntry>,
-) -> IncludeResult {
+    result: &mut ExpansionResult,
+) -> Result<(), IncludeError> {
     let canonical = path.canonicalize().map_err(|_| IncludeError {
         path: path.to_path_buf(),
         include_chain: include_chain.clone(),
@@ -128,13 +150,27 @@ fn expand_includes_recursive(
     })?;
 
     let source = extract_source(path, &content);
-    let mut expanded = Vec::new();
+
+    let mut test_block_iter = source.test_blocks.into_iter().peekable();
 
     for SourceLine {
         text,
         original_line,
     } in source.lines
     {
+        while let Some(test_block) = test_block_iter.peek() {
+            if test_block.start_line < original_line {
+                let test_block = test_block_iter.next().unwrap();
+                result.test_blocks.push(ExpandedTestBlock {
+                    block: test_block,
+                    file_path: path.to_path_buf(),
+                    include_chain: include_chain.clone(),
+                });
+            } else {
+                break;
+            }
+        }
+
         let parse_result = parse_line(&text, original_line);
 
         match parse_result {
@@ -149,13 +185,12 @@ fn expand_includes_recursive(
                 };
                 include_chain.push(entry);
 
-                let included = expand_includes_recursive(&resolved, visited, include_chain)?;
-                expanded.extend(included);
+                expand_includes_recursive(&resolved, visited, include_chain, result)?;
 
                 include_chain.pop();
             }
             Ok(_) => {
-                expanded.push(ExpandedLine {
+                result.lines.push(ExpandedLine {
                     text,
                     original_line,
                     file_path: path.to_path_buf(),
@@ -172,8 +207,16 @@ fn expand_includes_recursive(
         }
     }
 
+    for test_block in test_block_iter {
+        result.test_blocks.push(ExpandedTestBlock {
+            block: test_block,
+            file_path: path.to_path_buf(),
+            include_chain: include_chain.clone(),
+        });
+    }
+
     visited.remove(&canonical);
-    Ok(expanded)
+    Ok(())
 }
 
 /// Resolves an include path relative to the containing file's directory.
@@ -263,12 +306,13 @@ mod tests {
         let path = create_temp_file(temp_dir.path(), "test.n1", content);
 
         let result = expand_includes(&path).unwrap();
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0].text, "MOV R0, #1");
-        assert_eq!(result[0].original_line, 1);
-        assert_eq!(result[1].text, "ADD R0, R0, R1");
-        assert_eq!(result[1].original_line, 2);
-        assert!(result[0].include_chain.is_empty());
+        assert_eq!(result.lines.len(), 2);
+        assert_eq!(result.lines[0].text, "MOV R0, #1");
+        assert_eq!(result.lines[0].original_line, 1);
+        assert_eq!(result.lines[1].text, "ADD R0, R0, R1");
+        assert_eq!(result.lines[1].original_line, 2);
+        assert!(result.lines[0].include_chain.is_empty());
+        assert!(result.test_blocks.is_empty());
     }
 
     #[test]
@@ -285,14 +329,14 @@ mod tests {
         let main_path = create_temp_file(temp_dir.path(), "main.n1", &main_content);
 
         let result = expand_includes(&main_path).unwrap();
-        assert_eq!(result.len(), 3);
-        assert_eq!(result[0].text, "MOV R0, #1");
-        assert_eq!(result[1].text, "ADD R0, R0, R1");
-        assert_eq!(result[2].text, "HALT");
+        assert_eq!(result.lines.len(), 3);
+        assert_eq!(result.lines[0].text, "MOV R0, #1");
+        assert_eq!(result.lines[1].text, "ADD R0, R0, R1");
+        assert_eq!(result.lines[2].text, "HALT");
 
-        assert!(result[0].include_chain.is_empty());
-        assert_eq!(result[1].include_chain.len(), 1);
-        assert_eq!(result[1].include_chain[0].line, 2);
+        assert!(result.lines[0].include_chain.is_empty());
+        assert_eq!(result.lines[1].include_chain.len(), 1);
+        assert_eq!(result.lines[1].include_chain[0].line, 2);
     }
 
     #[test]
@@ -314,16 +358,16 @@ mod tests {
         let main_path = create_temp_file(temp_dir.path(), "main.n1", main_content);
 
         let result = expand_includes(&main_path).unwrap();
-        assert_eq!(result.len(), 5);
-        assert_eq!(result[0].text, "MOV R0, #1");
-        assert_eq!(result[1].text, "ADD R0, R0, R1");
-        assert_eq!(result[2].text, "XOR R0, R0");
-        assert_eq!(result[3].text, "SUB R0, R0, R1");
-        assert_eq!(result[4].text, "HALT");
+        assert_eq!(result.lines.len(), 5);
+        assert_eq!(result.lines[0].text, "MOV R0, #1");
+        assert_eq!(result.lines[1].text, "ADD R0, R0, R1");
+        assert_eq!(result.lines[2].text, "XOR R0, R0");
+        assert_eq!(result.lines[3].text, "SUB R0, R0, R1");
+        assert_eq!(result.lines[4].text, "HALT");
 
-        assert!(result[0].include_chain.is_empty());
-        assert_eq!(result[1].include_chain.len(), 1);
-        assert_eq!(result[2].include_chain.len(), 2);
+        assert!(result.lines[0].include_chain.is_empty());
+        assert_eq!(result.lines[1].include_chain.len(), 1);
+        assert_eq!(result.lines[2].include_chain.len(), 2);
     }
 
     #[test]
@@ -377,10 +421,10 @@ mod tests {
         let main_path = create_temp_file(temp_dir.path(), "main.n1.md", &main_content);
 
         let result = expand_includes(&main_path).unwrap();
-        assert_eq!(result.len(), 3);
-        assert_eq!(result[0].text, "MOV R0, #1");
-        assert_eq!(result[1].text, "ADD R0, R0, R1");
-        assert_eq!(result[2].text, "HALT");
+        assert_eq!(result.lines.len(), 3);
+        assert_eq!(result.lines[0].text, "MOV R0, #1");
+        assert_eq!(result.lines[1].text, "ADD R0, R0, R1");
+        assert_eq!(result.lines[2].text, "HALT");
     }
 
     #[test]
@@ -432,5 +476,103 @@ mod tests {
             format_include_chain(&line),
             "inner.n1:7 (included from middle.n1:4 (included from main.n1:2))"
         );
+    }
+
+    #[test]
+    fn collect_test_blocks_from_single_file() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let content = r"# Title
+
+```n1asm
+MOV R0, #1
+HALT
+```
+
+```n1test
+R0 == 0x0001
+```
+";
+        let path = create_temp_file(temp_dir.path(), "test.n1.md", content);
+
+        let result = expand_includes(&path).unwrap();
+        assert_eq!(result.lines.len(), 2);
+        assert_eq!(result.test_blocks.len(), 1);
+        assert_eq!(result.test_blocks[0].block.content, "R0 == 0x0001");
+        assert!(result.test_blocks[0].include_chain.is_empty());
+    }
+
+    #[test]
+    fn collect_test_blocks_from_included_file() {
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        let included_content = "```n1asm\nADD R0, R0, R1\n```\n\n```n1test\nR1 == 0x0002\n```\n";
+        let included_path = create_temp_file(temp_dir.path(), "utils.n1.md", included_content);
+
+        let main_content = format!(
+            "```n1asm\nMOV R0, #1\n.include \"{}\"\nHALT\n```\n\n```n1test\nR0 == 0x0001\n```\n",
+            included_path.file_name().unwrap().to_str().unwrap()
+        );
+        let main_path = create_temp_file(temp_dir.path(), "main.n1.md", &main_content);
+
+        let result = expand_includes(&main_path).unwrap();
+        assert_eq!(result.lines.len(), 3);
+
+        assert_eq!(result.test_blocks.len(), 2);
+        assert_eq!(result.test_blocks[0].block.content, "R1 == 0x0002");
+        assert_eq!(result.test_blocks[0].include_chain.len(), 1);
+        assert_eq!(result.test_blocks[1].block.content, "R0 == 0x0001");
+        assert!(result.test_blocks[1].include_chain.is_empty());
+    }
+
+    #[test]
+    fn test_blocks_in_document_order() {
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        let included_content =
+            "```n1asm\n; included code\n```\n\n```n1test\n; test B - from included file\n```\n";
+        let included_path = create_temp_file(temp_dir.path(), "inc.n1.md", included_content);
+
+        let main_content = format!(
+            "```n1test\n; test A - before include\n```\n\n```n1asm\n.include \"{}\"\n```\n\n```n1test\n; test C - after include\n```\n",
+            included_path.file_name().unwrap().to_str().unwrap()
+        );
+        let main_path = create_temp_file(temp_dir.path(), "main.n1.md", &main_content);
+
+        let result = expand_includes(&main_path).unwrap();
+        assert_eq!(result.test_blocks.len(), 3);
+        assert!(result.test_blocks[0].block.content.contains("test A"));
+        assert!(result.test_blocks[1].block.content.contains("test B"));
+        assert!(result.test_blocks[2].block.content.contains("test C"));
+    }
+
+    #[test]
+    fn test_blocks_from_nested_includes() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let sub_dir = temp_dir.path().join("lib");
+        fs::create_dir(&sub_dir).unwrap();
+
+        let inner_content = "```n1test\n; inner test\n```\n";
+        let inner_path = create_temp_file(&sub_dir, "inner.n1.md", inner_content);
+
+        let middle_content = format!(
+            "```n1asm\n.include \"{}\"\n```\n\n```n1test\n; middle test\n```\n",
+            inner_path.file_name().unwrap().to_str().unwrap()
+        );
+        let _middle_path = create_temp_file(&sub_dir, "middle.n1.md", &middle_content);
+
+        let include_path = String::from("lib/middle.n1.md");
+        let main_content = format!(
+            "```n1test\n; main test 1\n```\n\n```n1asm\n.include \"{include_path}\"\n```\n\n```n1test\n; main test 2\n```\n"
+        );
+        let main_path = create_temp_file(temp_dir.path(), "main.n1.md", &main_content);
+
+        let result = expand_includes(&main_path).unwrap();
+        assert_eq!(result.test_blocks.len(), 4);
+        assert!(result.test_blocks[0].block.content.contains("main test 1"));
+        assert!(result.test_blocks[1].block.content.contains("inner test"));
+        assert!(result.test_blocks[2].block.content.contains("middle test"));
+        assert!(result.test_blocks[3].block.content.contains("main test 2"));
+
+        assert_eq!(result.test_blocks[1].include_chain.len(), 2);
     }
 }
