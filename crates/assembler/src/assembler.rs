@@ -32,6 +32,18 @@ pub struct AssembleError {
     pub location: Option<SourceLocation>,
 }
 
+impl std::fmt::Display for AssembleErrorKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Include(e) => write!(f, "include error: {e}"),
+            Self::Parse(msg) => write!(f, "parse error: {msg}"),
+            Self::Symbol(e) => write!(f, "{e}"),
+            Self::Encode(e) => write!(f, "{e}"),
+            Self::Io(msg) => write!(f, "I/O error: {msg}"),
+        }
+    }
+}
+
 /// Source location for error reporting.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceLocation {
@@ -60,13 +72,7 @@ pub enum AssembleErrorKind {
 
 impl std::fmt::Display for AssembleError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self.kind {
-            AssembleErrorKind::Include(e) => write!(f, "include error: {e}"),
-            AssembleErrorKind::Parse(msg) => write!(f, "parse error: {msg}"),
-            AssembleErrorKind::Symbol(e) => write!(f, "{e}"),
-            AssembleErrorKind::Encode(e) => write!(f, "{e}"),
-            AssembleErrorKind::Io(msg) => write!(f, "I/O error: {msg}"),
-        }
+        write!(f, "{}", self.kind)
     }
 }
 
