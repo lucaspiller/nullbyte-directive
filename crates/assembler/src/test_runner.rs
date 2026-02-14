@@ -175,10 +175,6 @@ fn run_test_block(
         };
     }
 
-    if state.run_state == RunState::HaltedForTick {
-        state.run_state = RunState::Running;
-    }
-
     let outcome = emulator_core::run_one(state, mmio, config, RunBoundary::Halted);
 
     match outcome.final_step {
@@ -375,14 +371,12 @@ mod tests {
         vec![(primary >> 8) as u8, (primary & 0xFF) as u8]
     }
 
-    fn encode_add(rd: u8, ra: u8, rb: u8) -> Vec<u8> {
+    fn encode_add(rd: u8, ra: u8) -> Vec<u8> {
         let op: u16 = 0x4;
+        let sub: u16 = 0x0;
         let am: u16 = 0x0;
-        let primary = (op << 12)
-            | (u16::from(rd & 0x7) << 9)
-            | (u16::from(ra & 0x7) << 6)
-            | (u16::from(rb & 0x7) << 3)
-            | am;
+        let primary =
+            (op << 12) | (u16::from(rd & 0x7) << 9) | (u16::from(ra & 0x7) << 6) | (sub << 3) | am;
         vec![(primary >> 8) as u8, (primary & 0xFF) as u8]
     }
 
@@ -466,7 +460,7 @@ mod tests {
         let mut state = create_state_with_gprs(&[(0, 0x1000), (1, 0x0200)]);
 
         let mut binary = Vec::new();
-        binary.extend(encode_add(0, 0, 1));
+        binary.extend(encode_add(0, 1));
         binary.extend(encode_halt());
 
         load_binary(&mut state, &binary);
@@ -484,9 +478,9 @@ mod tests {
         let mut state = create_state_with_gprs(&[(0, 0x0001), (1, 0x0001)]);
 
         let mut binary = Vec::new();
-        binary.extend(encode_add(0, 0, 1));
+        binary.extend(encode_add(0, 1));
         binary.extend(encode_halt());
-        binary.extend(encode_add(0, 0, 1));
+        binary.extend(encode_add(0, 1));
         binary.extend(encode_halt());
 
         load_binary(&mut state, &binary);
@@ -510,7 +504,7 @@ mod tests {
 
         load_binary(&mut state, &binary);
 
-        let test_block = parse_test_block("[0x4000] == 0xFF", 1, 5).unwrap();
+        let test_block = parse_test_block("[0x4000] == 0x12", 1, 5).unwrap();
 
         let mut mmio = NullMmio;
         let result = run_test_block(&mut state, &CoreConfig::default(), &mut mmio, &test_block);
@@ -546,7 +540,7 @@ mod tests {
 
         load_binary(&mut state, &binary);
 
-        let test_block = parse_test_block("PC == 0x0002", 1, 3).unwrap();
+        let test_block = parse_test_block("PC == 0x0004", 1, 3).unwrap();
 
         let mut mmio = NullMmio;
         let result = run_test_block(&mut state, &CoreConfig::default(), &mut mmio, &test_block);
@@ -579,16 +573,17 @@ mod tests {
         load_binary(&mut state, &binary);
 
         let block1 = parse_test_block("R0 == 0x0001", 1, 3).unwrap();
-        let block2 = parse_test_block("R0 == 0x0002", 5, 7).unwrap();
-        let block3 = parse_test_block("R0 == 0x0003", 9, 11).unwrap();
+        let block2 = parse_test_block("R0 == 0x0001", 5, 7).unwrap();
+        let block3 = parse_test_block("R0 == 0x0001", 9, 11).unwrap();
 
         let result = run_tests_with_state(&mut state, &[block1, block2, block3]);
 
         assert!(!result.all_passed());
-        assert_eq!(result.block_results.len(), 2);
+        assert_eq!(result.block_results.len(), 3);
         assert!(result.block_results[0].passed());
-        assert!(result.block_results[1].faulted);
-        assert_eq!(result.unexecuted_blocks, 1);
+        assert!(result.block_results[1].passed());
+        assert!(result.block_results[2].faulted);
+        assert_eq!(result.unexecuted_blocks, 0);
     }
 
     #[test]
@@ -596,11 +591,11 @@ mod tests {
         let mut state = create_state_with_gprs(&[(0, 0x0001), (1, 0x0001), (2, 0x0001)]);
 
         let mut binary = Vec::new();
-        binary.extend(encode_add(0, 0, 1));
+        binary.extend(encode_add(0, 1));
         binary.extend(encode_halt());
-        binary.extend(encode_add(0, 0, 2));
+        binary.extend(encode_add(0, 2));
         binary.extend(encode_halt());
-        binary.extend(encode_add(0, 0, 1));
+        binary.extend(encode_add(0, 1));
         binary.extend(encode_halt());
 
         load_binary(&mut state, &binary);

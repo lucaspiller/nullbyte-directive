@@ -142,6 +142,15 @@ fn parse_test_args(args: impl Iterator<Item = OsString>) -> Result<TestArgs, Str
 fn default_output_path(input: &Path) -> PathBuf {
     let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("out");
 
+    let stem = if std::path::Path::new(stem)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("n1"))
+    {
+        stem.strip_suffix(".n1").unwrap_or(stem)
+    } else {
+        stem
+    };
+
     let parent = input.parent().unwrap_or_else(|| std::path::Path::new(""));
 
     parent.join(format!("{stem}.bin"))

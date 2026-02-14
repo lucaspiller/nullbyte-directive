@@ -398,7 +398,7 @@ fn execute_mov(
     };
 
     let value = match instr.addressing_mode {
-        Some(AddressingMode::DirectRegister) => read_register(state, instr.rb),
+        Some(AddressingMode::DirectRegister) => read_register(state, instr.ra),
         Some(AddressingMode::Immediate) => instr.immediate_value,
         _ => None,
     };
@@ -1522,8 +1522,11 @@ mod tests {
         let mut state = CoreState::default();
         state.arch.set_gpr(GeneralRegister::R1, 0x1234);
 
-        // MOV R0, R1 - OP=1, SUB=0, RD=0, RA=1, RB=0, AM=0
-        let instr = decode_instr(0x0488);
+        // MOV R0, R1 - OP=1, SUB=0, RD=0, RA=1, AM=0
+        // Word layout: [OP:4][RD:3][RA:3][SUB:3][AM:3]
+        // = (1<<12) | (0<<9) | (1<<6) | (0<<3) | 0 = 0x1040
+        let instr = decode_instr(0x1040);
+        assert_eq!(instr.encoding, OpcodeEncoding::Mov);
         let mut exec = ExecuteState::new(0);
         execute_mov(&instr, &state, &mut exec, 0x0002);
 
