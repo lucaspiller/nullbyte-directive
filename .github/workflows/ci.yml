@@ -128,7 +128,7 @@ jobs:
         run: cargo install wasm-pack
 
       - name: Install JavaScript dependencies
-        run: yarn install --frozen-lockfile
+        run: yarn install --frozen-lockfile && cd apps/debug-tool && yarn install --frozen-lockfile
 
       - name: Build WASM module
         run: cd apps/debug-tool && yarn build:wasm
