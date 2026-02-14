@@ -11,7 +11,7 @@
       <div class="flex justify-between">
         <span class="text-terminal-fg opacity-70">{reg.toUpperCase()}</span>
         <span class="text-accent-warning">
-          0x{(arch?.regs?.[i] || 0).toString(16).padStart(4, '0').toUpperCase()}
+          0x{(arch?.gpr?.[i] || 0).toString(16).padStart(4, '0').toUpperCase()}
         </span>
       </div>
     {/each}

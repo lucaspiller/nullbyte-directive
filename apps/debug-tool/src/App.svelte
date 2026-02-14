@@ -9,10 +9,21 @@
 
   let state = $state({});
   let memory = $state.raw(new Uint8Array(65536));
+  let previousMemory = $state.raw(new Uint8Array(65536));
   let logs = $state([]);
   let isRunning = $state(false);
   let interval;
   let wasm = $state({ core: null });
+  let lastLoadedProgram = null;
+
+  const TICK_INTERVAL_MS = 10;
+
+  const SPEEDS = [
+    { name: 'SLOW', interval: 100 },
+    { name: 'FAST', interval: 10 },
+    { name: 'TURBO', interval: 0 },
+  ];
+  let speedIndex = $state(1);
 
   async function loadWasm() {
     try {
@@ -32,6 +43,7 @@
   function updateState() {
     if (!wasm.core) return;
     try {
+      previousMemory = new Uint8Array(memory);
       state = wasm.core.get_state();
       memory = wasm.core.get_memory();
     } catch (e) {
@@ -50,14 +62,49 @@
     }
   }
 
+  function tick() {
+    if (!wasm.core) return null;
+    try {
+      return wasm.core.tick();
+    } catch (e) {
+      console.error(e);
+      logs = [...logs, { ts: Date.now(), msg: `Tick Error: ${e.message}` }];
+      return null;
+    }
+  }
+
   function run() {
     if (isRunning) return;
     isRunning = true;
+    const currentSpeed = SPEEDS[speedIndex];
+    if (currentSpeed.interval === 0) {
+      startTurbo();
+    } else {
+      interval = setInterval(() => {
+        if (wasm.core) {
+          step();
+        }
+      }, currentSpeed.interval);
+    }
+  }
+
+  function startTurbo() {
     interval = setInterval(() => {
-      if (wasm.core) {
-        step();
+      if (wasm.core && isRunning) {
+        const outcome = tick();
+        if (outcome?.final_step?.Fault !== undefined) {
+          pause();
+          updateState();
+          logs = [...logs, { ts: Date.now(), msg: `Fault: ${outcome.final_step.Fault}` }];
+        }
       }
-    }, 100);
+    }, TICK_INTERVAL_MS);
+
+    requestAnimationFrame(function turboUpdateState() {
+      if (!isRunning) return;
+      updateState();
+      requestAnimationFrame(turboUpdateState);
+    });
   }
 
   function pause() {
@@ -70,8 +117,18 @@
     if (!wasm.core) return;
     pause();
     wasm.core.reset();
+    if (lastLoadedProgram) {
+      wasm.core.load_program(lastLoadedProgram);
+    }
     updateState();
     logs = [...logs, { ts: Date.now(), msg: "Core reset." }];
+  }
+
+  function cycleSpeed() {
+    const wasRunning = isRunning;
+    if (wasRunning) pause();
+    speedIndex = (speedIndex + 1) % SPEEDS.length;
+    if (wasRunning) run();
   }
 
   let fileInput;
@@ -83,11 +140,23 @@
     reader.onload = (evt) => {
       const arrayBuffer = evt.target.result;
       const bytes = new Uint8Array(arrayBuffer);
+      lastLoadedProgram = bytes;
       wasm.core.load_program(bytes);
       updateState();
       logs = [...logs, { ts: Date.now(), msg: `Loaded ${bytes.length} bytes from ${file.name}` }];
     };
     reader.readAsArrayBuffer(file);
+  }
+
+  function formatRunState(runState) {
+    if (!runState) return 'UNKNOWN';
+    if (typeof runState === 'string') return runState;
+    const key = Object.keys(runState)[0];
+    const value = runState[key];
+    if (value !== null && value !== undefined) {
+      return `${key}(${value})`;
+    }
+    return key;
   }
 </script>
 
@@ -121,6 +190,12 @@
           onclick={reset}
         >
           RESET
+        </button>
+        <button 
+          class="px-3 py-1 border border-terminal-fg hover:bg-white hover:text-black rounded transition-colors text-xs uppercase tracking-wide {speedIndex === 2 ? 'bg-accent-warning text-black font-bold' : ''}"
+          onclick={cycleSpeed}
+        >
+          {SPEEDS[speedIndex].name}
         </button>
       </div>
 
@@ -160,7 +235,7 @@
 
     <!-- Center Column: Memory -->
     <div class="col-span-6 flex flex-col bg-panel-bg border border-panel-border h-full overflow-hidden">
-      <MemoryView memory={memory} startAddress={0x0000} rows={32} cols={16} />
+      <MemoryView memory={memory} previousMemory={previousMemory} pc={state?.arch?.pc || 0} />
     </div>
 
     <!-- Right Column: Logs / Events -->
@@ -171,7 +246,7 @@
   
   <!-- Status Bar -->
   <footer class="bg-panel-bg border-t border-panel-border p-1 text-xs flex justify-between px-4 opacity-60">
-    <span>STATUS: {state?.run_state || 'UNKNOWN'}</span>
+    <span>STATUS: {formatRunState(state?.run_state)}</span>
     <span>FAULT: {state?.latched_fault || 'NONE'}</span>
   </footer>
 </div>
