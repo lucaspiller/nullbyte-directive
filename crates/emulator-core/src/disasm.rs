@@ -48,25 +48,32 @@ pub fn disassemble_window(
     after: usize,
     memory: &[u8],
 ) -> Vec<DisassemblyRow> {
-    let mut rows = Vec::with_capacity(before + 1 + after);
+    let target_total = before + 1 + after;
+    let mut rows = Vec::with_capacity(target_total);
 
+    // Collect forward instructions first
     let mut pc = center_pc;
-    if after == 0 {
+    let mut forward_rows: Vec<DisassemblyRow> = Vec::new();
+
+    // First get the center instruction
+    if let Some(row) = disassemble_one(pc, memory) {
+        let len = row.len_bytes;
+        forward_rows.push(row);
+        pc = pc.wrapping_add(u16::from(len));
+    }
+
+    // Then get more forward instructions up to after
+    for _ in 0..after {
         if let Some(row) = disassemble_one(pc, memory) {
-            rows.push(row);
-        }
-    } else {
-        for _ in 0..=after {
-            if let Some(row) = disassemble_one(pc, memory) {
-                let next_pc = row.addr_start.wrapping_add(u16::from(row.len_bytes));
-                rows.push(row);
-                pc = next_pc;
-            } else {
-                break;
-            }
+            let len = row.len_bytes;
+            forward_rows.push(row);
+            pc = pc.wrapping_add(u16::from(len));
+        } else {
+            break;
         }
     }
 
+    // Now try to get backward instructions to fill in
     if before > 0 {
         let mut found_before: Vec<DisassemblyRow> = Vec::new();
         let mut scan_pc = center_pc;
@@ -100,7 +107,32 @@ pub fn disassemble_window(
         }
 
         found_before.reverse();
-        rows.splice(0..0, found_before);
+
+        // If we couldn't find enough backward, that's okay - forward already has center + after
+        // Just use what we found before (may be fewer than requested)
+        rows.extend(found_before);
+    }
+
+    // Add forward rows (center + after)
+    rows.extend(forward_rows);
+
+    // If we still don't have enough, try to get more forward instructions
+    if rows.len() < target_total {
+        let mut pc = if let Some(last) = rows.last() {
+            last.addr_start.wrapping_add(u16::from(last.len_bytes))
+        } else {
+            center_pc
+        };
+
+        while rows.len() < target_total {
+            if let Some(row) = disassemble_one(pc, memory) {
+                let len = row.len_bytes;
+                rows.push(row);
+                pc = pc.wrapping_add(u16::from(len));
+            } else {
+                break;
+            }
+        }
     }
 
     rows

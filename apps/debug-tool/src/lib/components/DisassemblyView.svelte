@@ -3,14 +3,19 @@
   export let memory;
   export let wasmCore;
 
-  const NUM_INSTRUCTIONS = 8;
+  const TOTAL_INSTRUCTIONS = 8;
 
-  // Include memory in reactive deps to trigger re-disassembly after program load
   $: disassembledInstructions = (() => {
     if (!wasmCore || !memory) return [];
     
     try {
-      const rows = wasmCore.disassemble_window(pc, 0, NUM_INSTRUCTIONS - 1);
+      // Try to show centered: 3 before, center, 4 after = 8 total
+      // The backend handles backward traversal properly now
+      const rows = wasmCore.disassemble_window(pc, 3, 4);
+      
+      // If we got fewer than expected (e.g., at start of memory), 
+      // the backend should have included more forward instructions
+      // Just return what we got
       return rows.map(row => ({
         addr: row.addr_start,
         len: row.len_bytes,
