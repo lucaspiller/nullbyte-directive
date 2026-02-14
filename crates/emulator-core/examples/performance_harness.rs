@@ -19,6 +19,8 @@
 //! The production target is 3,000+ active cores at 100 Hz. At 100 Hz, each tick is 10ms.
 //! With a tick budget of 640 cycles, each core needs to complete 640 cycles in 10ms.
 //! So 3,000 cores need 3,000 * 640 = 1,920,000 cycles per 10ms = 192,000,000 cycles/second.
+//!
+//! The benchmark runs on multiple threads to reflect real multi-core usage.
 
 #![allow(clippy::pedantic)]
 
@@ -31,11 +33,14 @@ use rstest as _;
 use serde as _;
 use thiserror as _;
 
+use std::sync::mpsc;
+use std::thread;
 use std::time::{Duration, Instant};
 
 const TICK_BUDGET_CYCLES: u16 = 640;
 const TICK_DURATION_MS: u64 = 10;
 const TICKS_PER_SECOND: u64 = 100;
+const NUM_THREADS: usize = 4;
 
 #[allow(clippy::cast_possible_truncation)]
 fn encode(op: u8, rd: u8, ra: u8, sub: u8, am: u8) -> u16 {
@@ -74,37 +79,62 @@ struct BenchmarkResult {
 }
 
 fn benchmark_nop_loop(duration: Duration) -> BenchmarkResult {
-    let mut state = CoreState::default();
+    let (tx, rx) = mpsc::channel();
 
-    load_word(&mut state, 0x0000, encode(0x0, 0, 0, 0x0, 0));
-    load_word(&mut state, 0x0002, encode(0x2, 0, 0, 0x0, 0));
+    let handles: Vec<_> = (0..NUM_THREADS)
+        .map(|_| {
+            let tx = tx.clone();
+            thread::spawn(move || {
+                let mut state = CoreState::default();
 
-    let config = CoreConfig {
-        profile: CoreProfile::Authority,
-        tick_budget_cycles: TICK_BUDGET_CYCLES,
-        tracing_enabled: false,
-    };
-    let mut mmio = NoopMmio;
+                load_word(&mut state, 0x0000, encode(0x0, 0, 0, 0x0, 0));
+                load_word(&mut state, 0x0002, encode(0x2, 0, 0, 0x0, 0));
+
+                let config = CoreConfig {
+                    profile: CoreProfile::Authority,
+                    tick_budget_cycles: TICK_BUDGET_CYCLES,
+                    tracing_enabled: false,
+                };
+                let mut mmio = NoopMmio;
+
+                let mut total_instructions = 0u64;
+                let mut total_cycles = 0u64;
+                let start = Instant::now();
+
+                while start.elapsed() < duration {
+                    state.arch.set_tick(0);
+                    state.run_state = emulator_core::RunState::Running;
+                    state.arch.set_pc(0x0000);
+
+                    let outcome =
+                        run_one(&mut state, &mut mmio, &config, RunBoundary::TickBoundary);
+                    total_instructions += u64::from(outcome.steps);
+                    total_cycles += u64::from(state.arch.tick());
+                }
+
+                tx.send((total_instructions, total_cycles)).ok();
+            })
+        })
+        .collect();
+
+    for h in handles {
+        h.join().ok();
+    }
+
+    drop(tx);
 
     let mut total_instructions = 0u64;
     let mut total_cycles = 0u64;
-    let start = Instant::now();
-
-    while start.elapsed() < duration {
-        state.arch.set_tick(0);
-        state.run_state = emulator_core::RunState::Running;
-        state.arch.set_pc(0x0000);
-
-        let outcome = run_one(&mut state, &mut mmio, &config, RunBoundary::TickBoundary);
-        total_instructions += u64::from(outcome.steps);
-        total_cycles += u64::from(state.arch.tick());
+    for (inst, cyc) in rx {
+        total_instructions += inst;
+        total_cycles += cyc;
     }
 
-    let elapsed_secs = start.elapsed().as_secs_f64();
+    let elapsed_secs = duration.as_secs_f64();
     let instructions_per_second = total_instructions as f64 / elapsed_secs;
     let cycles_per_second = total_cycles as f64 / elapsed_secs;
     let cores_at_100hz =
-        instructions_per_second / (TICK_BUDGET_CYCLES as f64 * TICKS_PER_SECOND as f64);
+        instructions_per_second / (f64::from(TICK_BUDGET_CYCLES) * TICKS_PER_SECOND as f64);
 
     BenchmarkResult {
         name: "nop_loop",
@@ -115,40 +145,65 @@ fn benchmark_nop_loop(duration: Duration) -> BenchmarkResult {
 }
 
 fn benchmark_alu_loop(duration: Duration) -> BenchmarkResult {
-    let mut state = CoreState::default();
+    let (tx, rx) = mpsc::channel();
 
-    load_word(&mut state, 0x0000, encode(0x4, 0, 1, 0x0, 0));
-    load_word(&mut state, 0x0002, encode(0x5, 0, 1, 0x0, 0));
-    load_word(&mut state, 0x0004, encode(0x6, 0, 1, 0x0, 0));
-    load_word(&mut state, 0x0006, encode(0x7, 0, 1, 0x0, 0));
-    load_word(&mut state, 0x0008, encode(0x2, 0, 0, 0x0, 0));
+    let handles: Vec<_> = (0..NUM_THREADS)
+        .map(|_| {
+            let tx = tx.clone();
+            thread::spawn(move || {
+                let mut state = CoreState::default();
 
-    let config = CoreConfig {
-        profile: CoreProfile::Authority,
-        tick_budget_cycles: TICK_BUDGET_CYCLES,
-        tracing_enabled: false,
-    };
-    let mut mmio = NoopMmio;
+                load_word(&mut state, 0x0000, encode(0x4, 0, 1, 0x0, 0));
+                load_word(&mut state, 0x0002, encode(0x5, 0, 1, 0x0, 0));
+                load_word(&mut state, 0x0004, encode(0x6, 0, 1, 0x0, 0));
+                load_word(&mut state, 0x0006, encode(0x7, 0, 1, 0x0, 0));
+                load_word(&mut state, 0x0008, encode(0x2, 0, 0, 0x0, 0));
+
+                let config = CoreConfig {
+                    profile: CoreProfile::Authority,
+                    tick_budget_cycles: TICK_BUDGET_CYCLES,
+                    tracing_enabled: false,
+                };
+                let mut mmio = NoopMmio;
+
+                let mut total_instructions = 0u64;
+                let mut total_cycles = 0u64;
+                let start = Instant::now();
+
+                while start.elapsed() < duration {
+                    state.arch.set_tick(0);
+                    state.run_state = emulator_core::RunState::Running;
+                    state.arch.set_pc(0x0000);
+
+                    let outcome =
+                        run_one(&mut state, &mut mmio, &config, RunBoundary::TickBoundary);
+                    total_instructions += u64::from(outcome.steps);
+                    total_cycles += u64::from(state.arch.tick());
+                }
+
+                tx.send((total_instructions, total_cycles)).ok();
+            })
+        })
+        .collect();
+
+    for h in handles {
+        h.join().ok();
+    }
+
+    drop(tx);
 
     let mut total_instructions = 0u64;
     let mut total_cycles = 0u64;
-    let start = Instant::now();
-
-    while start.elapsed() < duration {
-        state.arch.set_tick(0);
-        state.run_state = emulator_core::RunState::Running;
-        state.arch.set_pc(0x0000);
-
-        let outcome = run_one(&mut state, &mut mmio, &config, RunBoundary::TickBoundary);
-        total_instructions += u64::from(outcome.steps);
-        total_cycles += u64::from(state.arch.tick());
+    for (inst, cyc) in rx {
+        total_instructions += inst;
+        total_cycles += cyc;
     }
 
-    let elapsed_secs = start.elapsed().as_secs_f64();
+    let elapsed_secs = duration.as_secs_f64();
     let instructions_per_second = total_instructions as f64 / elapsed_secs;
     let cycles_per_second = total_cycles as f64 / elapsed_secs;
     let cores_at_100hz =
-        instructions_per_second / (TICK_BUDGET_CYCLES as f64 * TICKS_PER_SECOND as f64);
+        instructions_per_second / (f64::from(TICK_BUDGET_CYCLES) * TICKS_PER_SECOND as f64);
 
     BenchmarkResult {
         name: "alu_loop",
@@ -159,42 +214,67 @@ fn benchmark_alu_loop(duration: Duration) -> BenchmarkResult {
 }
 
 fn benchmark_memory_loop(duration: Duration) -> BenchmarkResult {
-    let mut state = CoreState::default();
+    let (tx, rx) = mpsc::channel();
 
-    let ram_base: u16 = 0x4000;
+    let handles: Vec<_> = (0..NUM_THREADS)
+        .map(|_| {
+            let tx = tx.clone();
+            thread::spawn(move || {
+                let mut state = CoreState::default();
 
-    load_word(&mut state, 0x0000, encode(0x8, 0, 0, 0x0, 1));
-    state.arch.set_sp(ram_base);
-    load_word(&mut state, 0x0002, encode(0x9, 0, 0, 0x0, 1));
-    load_word(&mut state, 0x0004, encode(0x2, 0, 0, 0x0, 0));
+                let ram_base: u16 = 0x4000;
 
-    let config = CoreConfig {
-        profile: CoreProfile::Authority,
-        tick_budget_cycles: TICK_BUDGET_CYCLES,
-        tracing_enabled: false,
-    };
-    let mut mmio = NoopMmio;
+                load_word(&mut state, 0x0000, encode(0x8, 0, 0, 0x0, 1));
+                state.arch.set_sp(ram_base);
+                load_word(&mut state, 0x0002, encode(0x9, 0, 0, 0x0, 1));
+                load_word(&mut state, 0x0004, encode(0x2, 0, 0, 0x0, 0));
+
+                let config = CoreConfig {
+                    profile: CoreProfile::Authority,
+                    tick_budget_cycles: TICK_BUDGET_CYCLES,
+                    tracing_enabled: false,
+                };
+                let mut mmio = NoopMmio;
+
+                let mut total_instructions = 0u64;
+                let mut total_cycles = 0u64;
+                let start = Instant::now();
+
+                while start.elapsed() < duration {
+                    state.arch.set_tick(0);
+                    state.run_state = emulator_core::RunState::Running;
+                    state.arch.set_pc(0x0000);
+                    state.arch.set_sp(ram_base);
+
+                    let outcome =
+                        run_one(&mut state, &mut mmio, &config, RunBoundary::TickBoundary);
+                    total_instructions += u64::from(outcome.steps);
+                    total_cycles += u64::from(state.arch.tick());
+                }
+
+                tx.send((total_instructions, total_cycles)).ok();
+            })
+        })
+        .collect();
+
+    for h in handles {
+        h.join().ok();
+    }
+
+    drop(tx);
 
     let mut total_instructions = 0u64;
     let mut total_cycles = 0u64;
-    let start = Instant::now();
-
-    while start.elapsed() < duration {
-        state.arch.set_tick(0);
-        state.run_state = emulator_core::RunState::Running;
-        state.arch.set_pc(0x0000);
-        state.arch.set_sp(ram_base);
-
-        let outcome = run_one(&mut state, &mut mmio, &config, RunBoundary::TickBoundary);
-        total_instructions += u64::from(outcome.steps);
-        total_cycles += u64::from(state.arch.tick());
+    for (inst, cyc) in rx {
+        total_instructions += inst;
+        total_cycles += cyc;
     }
 
-    let elapsed_secs = start.elapsed().as_secs_f64();
+    let elapsed_secs = duration.as_secs_f64();
     let instructions_per_second = total_instructions as f64 / elapsed_secs;
     let cycles_per_second = total_cycles as f64 / elapsed_secs;
     let cores_at_100hz =
-        instructions_per_second / (TICK_BUDGET_CYCLES as f64 * TICKS_PER_SECOND as f64);
+        instructions_per_second / (f64::from(TICK_BUDGET_CYCLES) * TICKS_PER_SECOND as f64);
 
     BenchmarkResult {
         name: "memory_loop",
@@ -205,41 +285,66 @@ fn benchmark_memory_loop(duration: Duration) -> BenchmarkResult {
 }
 
 fn benchmark_mixed_loop(duration: Duration) -> BenchmarkResult {
-    let mut state = CoreState::default();
+    let (tx, rx) = mpsc::channel();
 
-    load_word(&mut state, 0x0000, encode(0x0, 0, 0, 0x0, 0));
-    load_word(&mut state, 0x0002, encode(0x4, 0, 1, 0x0, 0));
-    load_word(&mut state, 0x0004, encode(0x5, 1, 0, 0x0, 0));
-    load_word(&mut state, 0x0006, encode(0x6, 2, 1, 0x0, 0));
-    load_word(&mut state, 0x0008, encode(0x3, 0, 0, 0x0, 0));
-    load_word(&mut state, 0x000A, encode(0x2, 0, 0, 0x0, 0));
+    let handles: Vec<_> = (0..NUM_THREADS)
+        .map(|_| {
+            let tx = tx.clone();
+            thread::spawn(move || {
+                let mut state = CoreState::default();
 
-    let config = CoreConfig {
-        profile: CoreProfile::Authority,
-        tick_budget_cycles: TICK_BUDGET_CYCLES,
-        tracing_enabled: false,
-    };
-    let mut mmio = NoopMmio;
+                load_word(&mut state, 0x0000, encode(0x0, 0, 0, 0x0, 0));
+                load_word(&mut state, 0x0002, encode(0x4, 0, 1, 0x0, 0));
+                load_word(&mut state, 0x0004, encode(0x5, 1, 0, 0x0, 0));
+                load_word(&mut state, 0x0006, encode(0x6, 2, 1, 0x0, 0));
+                load_word(&mut state, 0x0008, encode(0x3, 0, 0, 0x0, 0));
+                load_word(&mut state, 0x000A, encode(0x2, 0, 0, 0x0, 0));
+
+                let config = CoreConfig {
+                    profile: CoreProfile::Authority,
+                    tick_budget_cycles: TICK_BUDGET_CYCLES,
+                    tracing_enabled: false,
+                };
+                let mut mmio = NoopMmio;
+
+                let mut total_instructions = 0u64;
+                let mut total_cycles = 0u64;
+                let start = Instant::now();
+
+                while start.elapsed() < duration {
+                    state.arch.set_tick(0);
+                    state.run_state = emulator_core::RunState::Running;
+                    state.arch.set_pc(0x0000);
+
+                    let outcome =
+                        run_one(&mut state, &mut mmio, &config, RunBoundary::TickBoundary);
+                    total_instructions += u64::from(outcome.steps);
+                    total_cycles += u64::from(state.arch.tick());
+                }
+
+                tx.send((total_instructions, total_cycles)).ok();
+            })
+        })
+        .collect();
+
+    for h in handles {
+        h.join().ok();
+    }
+
+    drop(tx);
 
     let mut total_instructions = 0u64;
     let mut total_cycles = 0u64;
-    let start = Instant::now();
-
-    while start.elapsed() < duration {
-        state.arch.set_tick(0);
-        state.run_state = emulator_core::RunState::Running;
-        state.arch.set_pc(0x0000);
-
-        let outcome = run_one(&mut state, &mut mmio, &config, RunBoundary::TickBoundary);
-        total_instructions += u64::from(outcome.steps);
-        total_cycles += u64::from(state.arch.tick());
+    for (inst, cyc) in rx {
+        total_instructions += inst;
+        total_cycles += cyc;
     }
 
-    let elapsed_secs = start.elapsed().as_secs_f64();
+    let elapsed_secs = duration.as_secs_f64();
     let instructions_per_second = total_instructions as f64 / elapsed_secs;
     let cycles_per_second = total_cycles as f64 / elapsed_secs;
     let cores_at_100hz =
-        instructions_per_second / (TICK_BUDGET_CYCLES as f64 * TICKS_PER_SECOND as f64);
+        instructions_per_second / (f64::from(TICK_BUDGET_CYCLES) * TICKS_PER_SECOND as f64);
 
     BenchmarkResult {
         name: "mixed_loop",
@@ -264,6 +369,10 @@ fn print_results(results: &[BenchmarkResult]) {
     println!("║              EMULATOR-CORE PERFORMANCE HARNESS                  ║");
     println!("╠═════════════════════════════════════════════════════════════════╣");
     println!("║ Configuration:                                                  ║");
+    println!(
+        "║   Threads:       {:>5}                                          ║",
+        NUM_THREADS
+    );
     println!(
         "║   Tick budget:   {:>5} cycles/tick                              ║",
         TICK_BUDGET_CYCLES
