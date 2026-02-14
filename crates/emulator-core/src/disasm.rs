@@ -68,28 +68,39 @@ pub fn disassemble_window(
     }
 
     if before > 0 {
-        let mut before_rows: Vec<DisassemblyRow> = Vec::with_capacity(before);
-        let mut pc = center_pc;
+        let mut found_before: Vec<DisassemblyRow> = Vec::new();
+        let mut scan_pc = center_pc;
 
-        for _ in 0..before {
-            if pc < 2 {
-                break;
-            }
-            pc = pc.wrapping_sub(2);
+        while scan_pc > 0 && found_before.len() < before {
+            let mut found_one = false;
 
-            if let Some(row) = disassemble_one(pc, memory) {
-                let instr_end = row.addr_start.wrapping_add(u16::from(row.len_bytes));
-                if instr_end <= center_pc {
-                    before_rows.push(row);
-                    if before_rows.len() >= before {
+            for len in [4u8, 2u8].iter().copied() {
+                if scan_pc < u16::from(len) {
+                    continue;
+                }
+                let try_pc = scan_pc.wrapping_sub(u16::from(len));
+                if let Some(row) = disassemble_one(try_pc, memory) {
+                    let instr_end = row.addr_start.wrapping_add(u16::from(row.len_bytes));
+                    if instr_end == scan_pc && row.len_bytes == len {
+                        found_before.push(row);
+                        scan_pc = try_pc;
+                        found_one = true;
                         break;
                     }
                 }
             }
+
+            if !found_one {
+                scan_pc = scan_pc.wrapping_sub(1);
+            }
+
+            if found_before.len() >= before {
+                break;
+            }
         }
 
-        before_rows.reverse();
-        rows.splice(0..0, before_rows);
+        found_before.reverse();
+        rows.splice(0..0, found_before);
     }
 
     rows
