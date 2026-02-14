@@ -29,6 +29,8 @@ pub struct Immediate {
     pub value: i64,
     /// Whether this is a label reference (resolved in pass 2).
     pub is_label: bool,
+    /// The label name if this is a label reference.
+    pub label_name: Option<String>,
 }
 
 /// A memory operand with optional displacement.
@@ -641,6 +643,7 @@ fn parse_immediate(s: &str, line_number: usize) -> Result<Operand, ParseError> {
         return Ok(Operand::Immediate(Immediate {
             value: 0,
             is_label: true,
+            label_name: Some(s.to_string()),
         }));
     }
 
@@ -648,6 +651,7 @@ fn parse_immediate(s: &str, line_number: usize) -> Result<Operand, ParseError> {
     Ok(Operand::Immediate(Immediate {
         value: val,
         is_label: false,
+        label_name: None,
     }))
 }
 
