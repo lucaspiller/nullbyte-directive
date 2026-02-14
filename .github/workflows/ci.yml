@@ -43,3 +43,6 @@ jobs:
 
       - name: Run tests
         run: make test
+
+      - name: Replay determinism smoke
+        run: cargo test -p emulator-core deterministic_replay_is_stable_for_identical_inputs -- --exact

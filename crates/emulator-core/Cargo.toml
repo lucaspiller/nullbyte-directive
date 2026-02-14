@@ -22,7 +22,7 @@ proptest = "1.6.0"
 rstest = "0.25.0"
 
 [package.metadata.tooling]
-fuzz_harness = "TODO"
+fuzz_harness = "crates/emulator-core/fuzz/fuzz_targets/decode_execute_memory.rs"
 
 [lints.rust]
 unsafe_code = "forbid"
