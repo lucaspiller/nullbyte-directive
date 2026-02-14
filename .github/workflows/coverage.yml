@@ -23,7 +23,7 @@ jobs:
         uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Generate coverage (lcov)
-        run: cargo llvm-cov --workspace --lcov --output-path target/llvm-cov/lcov.info
+        run: mkdir -p target/llvm-cov && cargo llvm-cov --workspace --lcov --output-path target/llvm-cov/lcov.info
 
       - name: Upload coverage report artifact
         uses: actions/upload-artifact@v4
