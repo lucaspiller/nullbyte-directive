@@ -134,7 +134,7 @@ jobs:
         run: cd apps/debug-tool && yarn build:wasm
 
       - name: Build debug-tool
-        run: cd apps/debug-tool && yarn build
+        run: cd apps/debug-tool && yarn build --base=/nullbyte-directive/
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
