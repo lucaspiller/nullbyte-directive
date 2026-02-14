@@ -233,3 +233,27 @@ fn unknown_command_fails() {
     let stderr = String::from_utf8_lossy(&result.stderr);
     assert!(stderr.contains("unknown command"));
 }
+
+#[test]
+fn blinker_program_tests_pass() {
+    let blinker_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("programs/blinker.n1.md");
+
+    if !blinker_path.exists() {
+        eprintln!("Skipping blinker test - file not found at {blinker_path:?}");
+        return;
+    }
+
+    let result = Command::new(binary_path())
+        .args(["test", blinker_path.to_str().unwrap()])
+        .output()
+        .expect("failed to run nullbyte-asm");
+
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    assert!(result.status.success(), "blinker tests failed:\n{stdout}");
+    assert!(stdout.contains("Test Summary: 3 passed"));
+}

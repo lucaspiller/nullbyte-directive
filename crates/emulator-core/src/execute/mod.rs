@@ -28,7 +28,7 @@ mod helpers;
 pub use flags::FlagsUpdate;
 pub use helpers::{compute_effective_address, compute_effective_address_with_pc};
 
-use crate::decoder::{AddressingMode, DecodedInstruction, RegisterField};
+use crate::decoder::{AddressingMode, DecodedInstruction, DecodedOrFault, RegisterField};
 use crate::encoding::OpcodeEncoding;
 use crate::memory::{read_u16_be, write_u16_be};
 use crate::state::registers::FLAGS_ACTIVE_MASK;
@@ -173,7 +173,15 @@ pub fn execute_instruction(
     mmio: &mut dyn MmioBus,
 ) -> (ExecuteOutcome, ExecuteState) {
     let pc = state.arch.pc();
-    let next_pc = pc.wrapping_add(2);
+    let instr_size = if instr
+        .addressing_mode
+        .is_some_and(|am| am.requires_extension_word())
+    {
+        4
+    } else {
+        2
+    };
+    let next_pc = pc.wrapping_add(instr_size);
 
     let mut exec = ExecuteState::default();
 
@@ -307,6 +315,16 @@ pub fn commit_execution(state: &mut CoreState, exec: &ExecuteState) {
     state
         .arch
         .set_tick(state.arch.tick().wrapping_add(exec.cycles));
+
+    if exec.memory_write_pending {
+        if let (Some(addr), Some(value)) = (exec.memory_addr, exec.memory_write_value) {
+            if !exec.is_mmio_operation {
+                let bytes = value.to_be_bytes();
+                state.memory[usize::from(addr)] = bytes[0];
+                state.memory[usize::from(addr.wrapping_add(1))] = bytes[1];
+            }
+        }
+    }
 
     if exec.mmio_write_denied {
         state.mmio_denied_write_count = state.mmio_denied_write_count.saturating_add(1);
@@ -457,7 +475,7 @@ fn execute_store(
     exec.next_pc = Some(next_pc);
     exec.flags_update = FlagsUpdate::None;
 
-    let Some(value) = read_register(state, instr.ra) else {
+    let Some(value) = read_register(state, instr.rd) else {
         return;
     };
 
@@ -742,7 +760,15 @@ fn execute_jmp(
 ) {
     exec.cycles = crate::timing::cycle_cost(CycleCostKind::Jump).unwrap_or(2);
 
-    let Some(ea) = compute_effective_address(instr, state) else {
+    let target = match instr.addressing_mode {
+        Some(AddressingMode::Immediate) => {
+            let offset = instr.immediate_value.unwrap_or(0) as i16;
+            Some(next_pc.wrapping_add(offset as u16))
+        }
+        _ => compute_effective_address(instr, state),
+    };
+
+    let Some(ea) = target else {
         exec.next_pc = Some(next_pc);
         exec.flags_update = FlagsUpdate::None;
         return;
@@ -1333,7 +1359,22 @@ fn fetch_and_decode(pc: u16, memory: &[u8]) -> Result<DecodedInstruction, crate:
     let hi = memory[usize::from(pc.wrapping_add(1))];
     let raw_word = u16::from_be_bytes([lo, hi]);
 
-    Decoder::decode(raw_word).into()
+    let mut decoded = match Decoder::decode(raw_word) {
+        DecodedOrFault::Instruction(instr) => instr,
+        DecodedOrFault::Fault(reason) => return Err(reason.code()),
+    };
+
+    if let Some(am) = decoded.addressing_mode {
+        if am.requires_extension_word() {
+            let ext_pc = pc.wrapping_add(2);
+            let ext_lo = memory[usize::from(ext_pc)];
+            let ext_hi = memory[usize::from(ext_pc.wrapping_add(1))];
+            let extension_word = u16::from_be_bytes([ext_lo, ext_hi]);
+            decoded.immediate_value = Some(extension_word);
+        }
+    }
+
+    Ok(decoded)
 }
 
 /// Runs multiple steps until a specified boundary is reached.
@@ -1558,6 +1599,41 @@ mod tests {
         assert!(matches!(outcome, StepOutcome::Retired { cycles: 1 }));
         assert_eq!(state.arch.pc(), 0x0002);
         assert_eq!(state.arch.tick(), 1);
+    }
+
+    #[test]
+    fn step_one_mov_immediate_loads_extension_word() {
+        let mut state = CoreState::default();
+        // MOV R1, #0x4000 - OP=1, SUB=0, RD=1, RA=0, AM=5
+        // Primary word: 0x1205
+        // Extension word: 0x4000
+        state.memory[0x0000] = 0x12;
+        state.memory[0x0001] = 0x05;
+        state.memory[0x0002] = 0x40;
+        state.memory[0x0003] = 0x00;
+
+        struct NoMmio;
+        impl MmioBus for NoMmio {
+            fn read16(&mut self, _addr: u16) -> Result<u16, crate::api::MmioError> {
+                Err(crate::api::MmioError::ReadFailed)
+            }
+            fn write16(
+                &mut self,
+                _addr: u16,
+                _value: u16,
+            ) -> Result<crate::api::MmioWriteResult, crate::api::MmioError> {
+                Err(crate::api::MmioError::WriteFailed)
+            }
+        }
+
+        let mut mmio = NoMmio;
+        let config = CoreConfig::default();
+
+        let outcome = step_one(&mut state, &mut mmio, &config);
+
+        assert!(matches!(outcome, StepOutcome::Retired { .. }));
+        assert_eq!(state.arch.gpr(GeneralRegister::R1), 0x4000);
+        assert_eq!(state.arch.pc(), 0x0004);
     }
 
     #[test]
@@ -2346,5 +2422,84 @@ mod tests {
         let result = run_one_with_trace(&mut state, &mut mmio, &config, RunBoundary::Fault, None);
 
         assert!(result.steps >= 1);
+    }
+
+    #[test]
+    fn step_one_store_indirect_writes_memory() {
+        let mut state = CoreState::default();
+        // MOV R0, #0x1234
+        state.memory[0x0000] = 0x10;
+        state.memory[0x0001] = 0x05;
+        state.memory[0x0002] = 0x12;
+        state.memory[0x0003] = 0x34;
+        // MOV R1, #0x4000
+        state.memory[0x0004] = 0x12;
+        state.memory[0x0005] = 0x05;
+        state.memory[0x0006] = 0x40;
+        state.memory[0x0007] = 0x00;
+        // STORE R0, [R1]
+        state.memory[0x0008] = 0x30;
+        state.memory[0x0009] = 0x41;
+        // HALT
+        state.memory[0x000A] = 0x00;
+        state.memory[0x000B] = 0x10;
+
+        struct NoMmio;
+        impl MmioBus for NoMmio {
+            fn read16(&mut self, _addr: u16) -> Result<u16, crate::api::MmioError> {
+                Err(crate::api::MmioError::ReadFailed)
+            }
+            fn write16(
+                &mut self,
+                _addr: u16,
+                _value: u16,
+            ) -> Result<crate::api::MmioWriteResult, crate::api::MmioError> {
+                Ok(crate::api::MmioWriteResult::DeniedSuppressed)
+            }
+        }
+
+        let mut mmio = NoMmio;
+        let config = CoreConfig::default();
+
+        // Execute MOV R0, #0x1234
+        let _ = step_one(&mut state, &mut mmio, &config);
+        println!(
+            "After MOV R0: R0={:#06X}",
+            state.arch.gpr(GeneralRegister::R0)
+        );
+        assert_eq!(state.arch.gpr(GeneralRegister::R0), 0x1234);
+
+        // Execute MOV R1, #0x4000
+        let _ = step_one(&mut state, &mut mmio, &config);
+        println!(
+            "After MOV R1: R1={:#06X}",
+            state.arch.gpr(GeneralRegister::R1)
+        );
+        assert_eq!(state.arch.gpr(GeneralRegister::R1), 0x4000);
+
+        // Decode STORE to check fields
+        use crate::Decoder;
+        let store_word = u16::from_be_bytes([state.memory[0x0008], state.memory[0x0009]]);
+        let decoded = match Decoder::decode(store_word) {
+            DecodedOrFault::Instruction(i) => i,
+            _ => panic!("Failed to decode STORE"),
+        };
+        println!(
+            "STORE decoded: rd={:?}, ra={:?}, am={:?}",
+            decoded.rd, decoded.ra, decoded.addressing_mode
+        );
+
+        // Execute STORE R0, [R1]
+        let outcome = step_one(&mut state, &mut mmio, &config);
+        println!("After STORE: outcome={:?}", outcome);
+        println!(
+            "Memory at 0x4000: {:#04X} {:#04X}",
+            state.memory[0x4000], state.memory[0x4001]
+        );
+        assert!(matches!(outcome, StepOutcome::Retired { .. }));
+
+        // Check memory - big-endian, so 0x1234 at 0x4000 is [0x12, 0x34]
+        assert_eq!(state.memory[0x4000], 0x12);
+        assert_eq!(state.memory[0x4001], 0x34);
     }
 }

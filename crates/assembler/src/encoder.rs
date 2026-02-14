@@ -9,12 +9,20 @@ use crate::parser::{Directive, InstructionSize, Operand, ParsedInstruction, Pars
 use crate::symbols::SymbolTable;
 
 /// Addressing mode bit values for the AM field.
+///
+/// These values align with the emulator-core decoder's interpretation:
+/// - 000: Register direct
+/// - 001: Register indirect
+/// - 010: Reg + signed disp8 (sign-extended)
+/// - 011: Absolute/Zero-extended displacement
+/// - 100: Indirect auto-increment (not used by assembler)
+/// - 101: Immediate / PC-relative
 mod am {
     pub const REGISTER_DIRECT: u8 = 0b000;
     pub const REGISTER_INDIRECT: u8 = 0b001;
     pub const SIGN_EXTENDED_DISPLACEMENT: u8 = 0b010;
     pub const ZERO_EXTENDED_DISPLACEMENT: u8 = 0b011;
-    pub const IMMEDIATE: u8 = 0b100;
+    pub const IMMEDIATE: u8 = 0b101;
     pub const PC_RELATIVE: u8 = 0b101;
 }
 

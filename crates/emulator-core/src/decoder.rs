@@ -54,6 +54,18 @@ impl AddressingMode {
     pub const fn requires_sign_extension_check(self) -> bool {
         matches!(self, Self::SignExtendedDisplacement)
     }
+
+    /// Returns true if this addressing mode requires an extension word.
+    #[must_use]
+    pub const fn requires_extension_word(self) -> bool {
+        matches!(
+            self,
+            Self::SignExtendedDisplacement
+                | Self::ZeroExtendedDisplacement
+                | Self::IndirectAutoIncrement
+                | Self::Immediate
+        )
+    }
 }
 
 /// Register field values in instruction encoding.
@@ -275,7 +287,7 @@ impl Decoder {
             return DecodedOrFault::Fault(FaultReason::new(FaultCode::IllegalEncoding));
         }
 
-        let immediate_value = Some(word & 0x3F);
+        let immediate_value = None;
 
         DecodedOrFault::Instruction(DecodedInstruction {
             encoding,
