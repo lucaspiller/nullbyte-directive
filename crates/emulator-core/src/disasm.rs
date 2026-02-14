@@ -49,17 +49,6 @@ pub fn disassemble_window(
     memory: &[u8],
 ) -> Vec<DisassemblyRow> {
     let mut rows = Vec::with_capacity(before + 1 + after);
-    let mut pc = center_pc.saturating_sub(u16::try_from(before * 2).unwrap_or(u16::MAX));
-
-    for _ in 0..before {
-        if let Some(row) = disassemble_one(pc, memory) {
-            if row.addr_start >= center_pc {
-                break;
-            }
-            rows.push(row.clone());
-        }
-        pc = pc.wrapping_add(2);
-    }
 
     let mut pc = center_pc;
     if after == 0 {
@@ -76,6 +65,31 @@ pub fn disassemble_window(
                 break;
             }
         }
+    }
+
+    if before > 0 {
+        let mut before_rows: Vec<DisassemblyRow> = Vec::with_capacity(before);
+        let mut pc = center_pc;
+
+        for _ in 0..before {
+            if pc < 2 {
+                break;
+            }
+            pc = pc.wrapping_sub(2);
+
+            if let Some(row) = disassemble_one(pc, memory) {
+                let instr_end = row.addr_start.wrapping_add(u16::from(row.len_bytes));
+                if instr_end <= center_pc {
+                    before_rows.push(row);
+                    if before_rows.len() >= before {
+                        break;
+                    }
+                }
+            }
+        }
+
+        before_rows.reverse();
+        rows.splice(0..0, before_rows);
     }
 
     rows
@@ -204,6 +218,17 @@ fn format_operands(instr: &crate::decoder::DecodedInstruction) -> String {
         return String::new();
     }
 
+    let is_jump = matches!(
+        instr.encoding,
+        OpcodeEncoding::Jmp
+            | OpcodeEncoding::Beq
+            | OpcodeEncoding::Bne
+            | OpcodeEncoding::Blt
+            | OpcodeEncoding::Ble
+            | OpcodeEncoding::Bgt
+            | OpcodeEncoding::Bge
+    );
+
     let rd = instr.rd.map(format_register);
     let ra = instr.ra.map(format_register);
     let rb = instr.rb.map(format_register);
@@ -271,11 +296,15 @@ fn format_operands(instr: &crate::decoder::DecodedInstruction) -> String {
         AddressingMode::SignExtendedDisplacement => {
             let imm = instr.immediate_value.unwrap_or(0);
             let disp = i16::from_be_bytes([(imm >> 8) as u8, u8::try_from(imm).unwrap_or(0)]);
-            match (&rd, &ra) {
-                (Some(d), Some(a)) => format!("{d}, [{a} {disp:+}]"),
-                (_, Some(a)) => format!("[{a} {disp:+}]"),
-                (Some(d), _) => format!("{d}, 0x{imm:04X}"),
-                _ => format!("0x{imm:04X}"),
+            if is_jump {
+                format!("{disp:+}")
+            } else {
+                match (&rd, &ra) {
+                    (Some(d), Some(a)) => format!("{d}, [{a} {disp:+}]"),
+                    (_, Some(a)) => format!("[{a} {disp:+}]"),
+                    (Some(d), _) => format!("{d}, 0x{imm:04X}"),
+                    _ => format!("0x{imm:04X}"),
+                }
             }
         }
         AddressingMode::ZeroExtendedDisplacement => {
@@ -289,8 +318,12 @@ fn format_operands(instr: &crate::decoder::DecodedInstruction) -> String {
         }
         AddressingMode::Immediate => {
             let imm = instr.immediate_value.unwrap_or(0);
-            rd.as_ref()
-                .map_or_else(|| format!("#0x{imm:04X}"), |d| format!("{d}, #0x{imm:04X}"))
+            if is_jump {
+                format!("#0x{imm:04X}")
+            } else {
+                rd.as_ref()
+                    .map_or_else(|| format!("#0x{imm:04X}"), |d| format!("{d}, #0x{imm:04X}"))
+            }
         }
         AddressingMode::Reserved110 | AddressingMode::Reserved111 => String::new(),
     }
@@ -401,7 +434,7 @@ mod tests {
         let rows = disassemble_window(0, 0, 0, &memory);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].mnemonic, "JMP");
-        assert!(rows[0].operands.contains("0x"));
+        assert_eq!(rows[0].operands, "#0xFFF6");
         assert_eq!(rows[0].len_bytes, 4);
     }
 
