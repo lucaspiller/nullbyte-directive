@@ -1047,4 +1047,176 @@ mod tests {
             assert_eq!(bytes.len(), 2, "{name}: Register-direct should be 2 bytes");
         }
     }
+
+    #[test]
+    fn all_addressing_modes_encode_correctly() {
+        let symbols = SymbolTable::new();
+
+        let am_000_cases: &[(&str, &str)] = &[
+            ("ADD register-direct", "ADD R0, R1, R2"),
+            ("MOV register-direct", "MOV R0, R1"),
+            ("PUSH", "PUSH R3"),
+            ("POP", "POP R5"),
+        ];
+
+        for (name, source) in am_000_cases {
+            let parsed = parse_line(source, 1).unwrap();
+            let bytes = encode_line(&parsed, &symbols, 0, 1).unwrap();
+            let primary = u16::from_be_bytes([bytes[0], bytes[1]]);
+            let am = (primary & 0x7) as u8;
+            assert_eq!(am, am::REGISTER_DIRECT, "{name}: expected AM=000");
+        }
+
+        let am_001_cases: &[(&str, &str)] = &[
+            ("LOAD indirect", "LOAD R0, [R1]"),
+            ("STORE indirect", "STORE R2, [R3]"),
+        ];
+
+        for (name, source) in am_001_cases {
+            let parsed = parse_line(source, 1).unwrap();
+            let bytes = encode_line(&parsed, &symbols, 0, 1).unwrap();
+            let primary = u16::from_be_bytes([bytes[0], bytes[1]]);
+            let am = (primary & 0x7) as u8;
+            assert_eq!(am, am::REGISTER_INDIRECT, "{name}: expected AM=001");
+        }
+
+        let am_010_cases: &[(&str, &str)] = &[
+            ("LOAD positive-disp", "LOAD R0, [R1 + 10]"),
+            ("LOAD negative-disp", "LOAD R0, [R1 - 10]"),
+            ("STORE positive-disp", "STORE R0, [R1 + 5]"),
+            ("STORE negative-disp", "STORE R0, [R1 - 5]"),
+        ];
+
+        for (name, source) in am_010_cases {
+            let parsed = parse_line(source, 1).unwrap();
+            let bytes = encode_line(&parsed, &symbols, 0, 1).unwrap();
+            assert_eq!(
+                bytes.len(),
+                4,
+                "{name}: expected 4 bytes for extension word"
+            );
+            let primary = u16::from_be_bytes([bytes[0], bytes[1]]);
+            let am = (primary & 0x7) as u8;
+            assert_eq!(
+                am,
+                am::SIGN_EXTENDED_DISPLACEMENT,
+                "{name}: expected AM=010"
+            );
+        }
+
+        let am_011_cases: &[(&str, &str)] = &[
+            ("LOAD absolute", "LOAD R0, #0x4000"),
+            ("STORE absolute", "STORE R1, #0x5000"),
+        ];
+
+        for (name, source) in am_011_cases {
+            let parsed = parse_line(source, 1).unwrap();
+            let bytes = encode_line(&parsed, &symbols, 0, 1).unwrap();
+            assert_eq!(
+                bytes.len(),
+                4,
+                "{name}: expected 4 bytes for extension word"
+            );
+            let primary = u16::from_be_bytes([bytes[0], bytes[1]]);
+            let am = (primary & 0x7) as u8;
+            assert_eq!(
+                am,
+                am::ZERO_EXTENDED_DISPLACEMENT,
+                "{name}: expected AM=011"
+            );
+        }
+
+        let mut symbols = SymbolTable::new();
+        symbols.insert(
+            "target".to_string(),
+            crate::symbols::Symbol {
+                address: 0x0100,
+                defined_at: 1,
+            },
+        );
+
+        let am_101_cases: &[(&str, &str)] = &[
+            ("MOV immediate", "MOV R0, #0x1234"),
+            ("ADD immediate", "ADD R0, R1, #0x42"),
+            ("JMP pc-relative", "JMP #target"),
+            ("BEQ pc-relative", "BEQ #target"),
+            ("CALL pc-relative", "CALL #target"),
+        ];
+
+        for (name, source) in am_101_cases {
+            let parsed = parse_line(source, 1).unwrap();
+            let bytes = encode_line(&parsed, &symbols, 0, 1).unwrap();
+            assert_eq!(
+                bytes.len(),
+                4,
+                "{name}: expected 4 bytes for extension word"
+            );
+            let primary = u16::from_be_bytes([bytes[0], bytes[1]]);
+            let am = (primary & 0x7) as u8;
+            assert_eq!(am, am::IMMEDIATE, "{name}: expected AM=101");
+        }
+    }
+
+    #[test]
+    fn extension_word_sign_extension_am_010() {
+        let symbols = SymbolTable::new();
+
+        let positive: &[(&str, i16, u16)] =
+            &[("+0", 0, 0x0000), ("+1", 1, 0x0001), ("+127", 127, 0x007F)];
+
+        for (name, disp, expected_ext) in positive {
+            let source = format!("LOAD R0, [R1 + {disp}]");
+            let parsed = parse_line(&source, 1).unwrap();
+            let bytes = encode_line(&parsed, &symbols, 0, 1).unwrap();
+            let ext = u16::from_be_bytes([bytes[2], bytes[3]]);
+            assert_eq!(ext, *expected_ext, "{name}: extension word mismatch");
+        }
+
+        let negative: &[(&str, i16, u16)] = &[("-1", -1, 0xFFFF), ("-128", -128, 0xFF80)];
+
+        for (name, disp, expected_ext) in negative {
+            let source = format!("LOAD R0, [R1 - {}]", disp.abs());
+            let parsed = parse_line(&source, 1).unwrap();
+            let bytes = encode_line(&parsed, &symbols, 0, 1).unwrap();
+            let ext = u16::from_be_bytes([bytes[2], bytes[3]]);
+            assert_eq!(ext, *expected_ext, "{name}: extension word mismatch");
+        }
+    }
+
+    #[test]
+    fn extension_word_immediate_am_101() {
+        let symbols = SymbolTable::new();
+
+        let cases: &[(&str, &str, u16)] = &[
+            ("0x0000", "MOV R0, #0x0000", 0x0000),
+            ("0x00FF", "MOV R0, #0x00FF", 0x00FF),
+            ("0x1234", "MOV R0, #0x1234", 0x1234),
+            ("0xFFFF", "MOV R0, #0xFFFF", 0xFFFF),
+        ];
+
+        for (name, source, expected_ext) in cases {
+            let parsed = parse_line(source, 1).unwrap();
+            let bytes = encode_line(&parsed, &symbols, 0, 1).unwrap();
+            let ext = u16::from_be_bytes([bytes[2], bytes[3]]);
+            assert_eq!(ext, *expected_ext, "{name}: extension word mismatch");
+        }
+    }
+
+    #[test]
+    fn extension_word_absolute_am_011() {
+        let symbols = SymbolTable::new();
+
+        let cases: &[(&str, &str, u16)] = &[
+            ("RAM start", "LOAD R0, #0x4000", 0x4000),
+            ("RAM end", "LOAD R0, #0xDFFF", 0xDFFF),
+            ("MMIO start", "LOAD R0, #0xE000", 0xE000),
+        ];
+
+        for (name, source, expected_ext) in cases {
+            let parsed = parse_line(source, 1).unwrap();
+            let bytes = encode_line(&parsed, &symbols, 0, 1).unwrap();
+            let ext = u16::from_be_bytes([bytes[2], bytes[3]]);
+            assert_eq!(ext, *expected_ext, "{name}: extension word mismatch");
+        }
+    }
 }
