@@ -1,7 +1,7 @@
-.PHONY: help fmt fmt-check clippy test coverage fuzz conformance
+.PHONY: help fmt fmt-check clippy test coverage fuzz conformance hardening determinism-fingerprint
 
 help:
-	@echo "Available targets: fmt fmt-check clippy test coverage fuzz conformance"
+	@echo "Available targets: fmt fmt-check clippy test coverage fuzz conformance hardening determinism-fingerprint"
 
 fmt:
 	cargo fmt --all
@@ -35,3 +35,9 @@ fuzz:
 
 conformance:
 	cargo test -p emulator-core conformance -- --nocapture
+
+hardening:
+	cargo test -p emulator-core --test phase14_suite
+
+determinism-fingerprint:
+	cargo run -p emulator-core --example determinism_fingerprint

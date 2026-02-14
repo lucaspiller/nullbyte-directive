@@ -21,6 +21,8 @@ use emulator_core::{
 };
 use proptest as _;
 use rstest as _;
+#[cfg(feature = "serde")]
+use serde as _;
 use thiserror as _;
 
 #[derive(Default)]

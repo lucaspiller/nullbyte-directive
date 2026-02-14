@@ -21,6 +21,9 @@ Run commands from the repository root:
   when `cargo-llvm-cov` is installed.
 - `make conformance` to run conformance-focused `emulator-core` tests.
 - `make fuzz` to check fuzz harness availability (`cargo-fuzz` required).
+- `make hardening` to run Phase 14 stress/determinism hardening tests.
+- `make determinism-fingerprint` to print the CI cross-host determinism
+  fingerprint.
 
 You can also run crate-only checks:
 

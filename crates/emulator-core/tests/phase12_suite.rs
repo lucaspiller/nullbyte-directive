@@ -18,6 +18,8 @@ use emulator_core::{
 };
 use proptest::prelude::*;
 use rstest as _;
+#[cfg(feature = "serde")]
+use serde as _;
 use thiserror as _;
 
 #[derive(Default)]

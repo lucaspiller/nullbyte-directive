@@ -1,4 +1,4 @@
-//! Core emulator crate for Nullbyte Directive.
+#![doc = include_str!("../README.md")]
 
 /// Memory model primitives and fixed region map.
 pub mod memory;
