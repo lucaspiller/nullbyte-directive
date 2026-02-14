@@ -8,6 +8,8 @@ pub mod assembler;
 pub mod encoder;
 /// Structured parse/assembly error types.
 pub mod errors;
+/// Include expansion (Pass 0).
+pub mod include;
 /// Mnemonic resolution against emulator opcode encoding tables.
 pub mod mnemonic;
 /// Assembly parser for instructions, labels, and directives.

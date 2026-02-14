@@ -224,6 +224,7 @@ pub fn encode_directive(
         Directive::Byte(val) => Ok(vec![*val]),
         Directive::Ascii(s) => Ok(s.as_bytes().to_vec()),
         Directive::Zero(count) => Ok(vec![0u8; *count]),
+        Directive::Include(_) => Ok(Vec::new()),
     }
 }
 

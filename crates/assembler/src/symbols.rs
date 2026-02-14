@@ -137,7 +137,7 @@ pub const fn line_size(parsed: &ParsedLine) -> u16 {
 #[allow(clippy::cast_possible_truncation)]
 const fn directive_size(directive: &Directive) -> u16 {
     match directive {
-        Directive::Org(_) => 0,
+        Directive::Org(_) | Directive::Include(_) => 0,
         Directive::Word(_) => 2,
         Directive::Byte(_) => 1,
         Directive::Ascii(s) => s.len() as u16,

@@ -6,6 +6,8 @@ use std::path::PathBuf;
 
 use assembler as _;
 use emulator_core as _;
+#[cfg(test)]
+use tempfile as _;
 
 const HELP_TEXT: &str = "Usage: nullbyte-asm <input> [-o <output>] [--verbose] [--help]";
 

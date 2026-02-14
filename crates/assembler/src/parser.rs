@@ -92,6 +92,8 @@ pub enum Directive {
     Ascii(String),
     /// `.zero count` - emit N zero bytes.
     Zero(usize),
+    /// `.include "path"` - include another source file.
+    Include(String),
 }
 
 /// A single parsed source line.
@@ -278,6 +280,10 @@ fn parse_directive(text: &str, line_number: usize) -> ParseResult {
             let count = parse_usize_value(args, line_number)?;
             Directive::Zero(count)
         }
+        "include" => {
+            let path = parse_include_path(args, line_number)?;
+            Directive::Include(path)
+        }
         _ => {
             return Err(ParseError {
                 location: SourceLocation {
@@ -350,6 +356,10 @@ fn parse_string_literal(s: &str, line: usize) -> Result<String, ParseError> {
         }),
         |pos| Ok(trimmed[1..=pos].to_string()),
     )
+}
+
+fn parse_include_path(s: &str, line: usize) -> Result<String, ParseError> {
+    parse_string_literal(s, line)
 }
 
 fn parse_instruction(text: &str, line_number: usize) -> ParseResult {
@@ -1015,6 +1025,28 @@ mod tests {
         match result {
             Ok(ParsedLine::Directive { directive }) => {
                 assert_eq!(directive, Directive::Zero(16));
+            }
+            _ => panic!("expected directive"),
+        }
+    }
+
+    #[test]
+    fn parse_directive_include() {
+        let result = parse_line(".include \"math.n1\"", 1);
+        match result {
+            Ok(ParsedLine::Directive { directive }) => {
+                assert_eq!(directive, Directive::Include("math.n1".into()));
+            }
+            _ => panic!("expected directive"),
+        }
+    }
+
+    #[test]
+    fn parse_directive_include_with_path() {
+        let result = parse_line(".include \"lib/utils.n1.md\"", 1);
+        match result {
+            Ok(ParsedLine::Directive { directive }) => {
+                assert_eq!(directive, Directive::Include("lib/utils.n1.md".into()));
             }
             _ => panic!("expected directive"),
         }
