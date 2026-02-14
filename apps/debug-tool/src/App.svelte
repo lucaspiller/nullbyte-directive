@@ -226,7 +226,7 @@
     <!-- Left Column: Disassembly & Registers -->
     <div class="col-span-3 flex flex-col gap-1 h-full min-h-0">
       <div class="flex-1 overflow-hidden bg-panel-bg border border-panel-border flex flex-col">
-        <DisassemblyView pc={state?.arch?.pc || 0} memory={memory} />
+        <DisassemblyView pc={state?.arch?.pc || 0} memory={memory} wasmCore={wasm.core} />
       </div>
       <div class="h-1/3 overflow-hidden bg-panel-bg border border-panel-border flex flex-col">
         <RegisterView arch={state?.arch || {}} />

@@ -1,6 +1,6 @@
 use emulator_core::{
-    run_one, step_one, CoreConfig, CoreState, MmioBus, MmioError, MmioWriteResult, RunBoundary,
-    RunOutcome, RunState, StepOutcome,
+    disassemble_window, run_one, step_one, CoreConfig, CoreState, MmioBus, MmioError,
+    MmioWriteResult, RunBoundary, RunOutcome, RunState, StepOutcome,
 };
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
@@ -156,6 +156,29 @@ impl WasmCore {
     #[must_use]
     pub fn get_memory(&self) -> js_sys::Uint8Array {
         js_sys::Uint8Array::from(self.state.memory.as_ref())
+    }
+
+    /// Disassembles a window of instructions around the given program counter.
+    ///
+    /// Returns a JSON array of disassembly rows. Each row contains:
+    /// - `addr_start`: number (instruction address)
+    /// - `len_bytes`: number (2 or 4)
+    /// - `raw_words`: number (raw encoding)
+    /// - `mnemonic`: string
+    /// - `operands`: string
+    /// - `is_illegal`: boolean
+    ///
+    /// # Errors
+    ///
+    /// Returns a JS error value when result serialization fails.
+    pub fn disassemble_window(
+        &self,
+        center_pc: u16,
+        before: usize,
+        after: usize,
+    ) -> Result<JsValue, JsValue> {
+        let rows = disassemble_window(center_pc, before, after, &self.state.memory);
+        serde_wasm_bindgen::to_value(&rows).map_err(|err| JsValue::from_str(&err.to_string()))
     }
 }
 

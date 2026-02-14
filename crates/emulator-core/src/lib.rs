@@ -56,6 +56,10 @@ pub use fault::{FaultClass, FaultCode};
 pub mod timing;
 pub use timing::{cycle_cost, CycleCostKind, CYCLE_COST_TABLE};
 
+/// Instruction disassembly utilities for debugging and visualization.
+pub mod disasm;
+pub use disasm::{disassemble_window, DisassemblyRow};
+
 /// Instruction execution pipeline.
 pub mod execute;
 pub use execute::{
