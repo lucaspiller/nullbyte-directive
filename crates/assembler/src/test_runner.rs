@@ -618,6 +618,25 @@ mod tests {
         assert_eq!(summary.total, 3);
     }
 
+    #[test]
+    fn fault_before_halt() {
+        let mut state = CoreState::with_config(&CoreConfig::default());
+
+        let mut binary = Vec::new();
+        binary.extend_from_slice(&[0xFF, 0xFF]);
+
+        load_binary(&mut state, &binary);
+
+        let test_block = parse_test_block("R0 == 0x0000", 1, 3).unwrap();
+
+        let mut mmio = NullMmio;
+        let result = run_test_block(&mut state, &CoreConfig::default(), &mut mmio, &test_block);
+
+        assert!(!result.passed());
+        assert!(result.faulted);
+        assert!(result.fault_message.is_some());
+    }
+
     fn run_tests_with_state(
         state: &mut CoreState,
         test_blocks: &[ParsedTestBlock],

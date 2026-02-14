@@ -496,4 +496,29 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn parse_memory_max_address() {
+        let result = parse_assertion("[0xFFFF] == 0xFF").unwrap();
+        assert_eq!(
+            result,
+            Assertion::Memory {
+                address: 0xFFFF,
+                operator: ComparisonOp::Equal,
+                expected: 0xFF,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_error_address_out_of_range() {
+        let result = parse_assertion("[0x10000] == 0xFF");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_error_bad_syntax_no_operator() {
+        let result = parse_assertion("R0 0x0001");
+        assert!(result.is_err());
+    }
 }

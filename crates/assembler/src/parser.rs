@@ -1189,4 +1189,28 @@ mod tests {
             _ => panic!("expected instruction"),
         }
     }
+
+    #[test]
+    fn error_malformed_operand_unclosed_bracket() {
+        let result = parse_line("LOAD R0, [R1", 1);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn error_malformed_operand_invalid_displacement() {
+        let result = parse_line("LOAD R0, [R1 + abc]", 1);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn error_unexpected_operand_for_halt() {
+        let result = parse_line("HALT R0", 1);
+        assert!(matches!(
+            result,
+            Err(ParseError {
+                kind: ParseErrorKind::UnexpectedOperand,
+                ..
+            })
+        ));
+    }
 }

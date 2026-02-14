@@ -575,4 +575,50 @@ R0 == 0x0001
 
         assert_eq!(result.test_blocks[1].include_chain.len(), 2);
     }
+
+    #[test]
+    fn cross_format_include_n1_into_n1md() {
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        let plain_content = "ADD R0, R0, R1\nSUB R0, R0, R0\n";
+        let plain_path = create_temp_file(temp_dir.path(), "utils.n1", plain_content);
+
+        let literate_content = format!(
+            "```n1asm\nMOV R0, #1\n.include \"{}\"\nHALT\n```\n",
+            plain_path.file_name().unwrap().to_str().unwrap()
+        );
+        let literate_path = create_temp_file(temp_dir.path(), "main.n1.md", &literate_content);
+
+        let result = expand_includes(&literate_path).unwrap();
+        assert_eq!(result.lines.len(), 4);
+        assert_eq!(result.lines[0].text, "MOV R0, #1");
+        assert_eq!(result.lines[1].text, "ADD R0, R0, R1");
+        assert_eq!(result.lines[2].text, "SUB R0, R0, R0");
+        assert_eq!(result.lines[3].text, "HALT");
+
+        assert_eq!(result.lines[1].include_chain.len(), 1);
+        assert!(result.lines[1].include_chain[0]
+            .from_file
+            .ends_with("main.n1.md"));
+    }
+
+    #[test]
+    fn cross_format_include_n1md_into_n1() {
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        let literate_content = "```n1asm\nADD R0, R0, R1\n```\n";
+        let literate_path = create_temp_file(temp_dir.path(), "utils.n1.md", literate_content);
+
+        let plain_content = format!(
+            "MOV R0, #1\n.include \"{}\"\nHALT\n",
+            literate_path.file_name().unwrap().to_str().unwrap()
+        );
+        let plain_path = create_temp_file(temp_dir.path(), "main.n1", &plain_content);
+
+        let result = expand_includes(&plain_path).unwrap();
+        assert_eq!(result.lines.len(), 3);
+        assert_eq!(result.lines[0].text, "MOV R0, #1");
+        assert_eq!(result.lines[1].text, "ADD R0, R0, R1");
+        assert_eq!(result.lines[2].text, "HALT");
+    }
 }
