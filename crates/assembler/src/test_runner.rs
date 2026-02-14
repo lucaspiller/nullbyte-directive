@@ -210,8 +210,7 @@ fn run_test_block(
         match outcome.final_step {
             StepOutcome::HaltedForTick => {
                 if was_explicit_halt_instruction(state, config) {
-                    let assertion_results =
-                        evaluate_assertions(state, &block.assertions);
+                    let assertion_results = evaluate_assertions(state, &block.assertions);
                     return TestBlockResult {
                         start_line: block.start_line,
                         end_line: block.end_line,
@@ -235,17 +234,13 @@ fn run_test_block(
                 }
             }
             StepOutcome::Fault { cause } => {
-                let assertion_results =
-                    evaluate_assertions(state, &block.assertions);
+                let assertion_results = evaluate_assertions(state, &block.assertions);
                 return TestBlockResult {
                     start_line: block.start_line,
                     end_line: block.end_line,
                     assertion_results,
                     faulted: true,
-                    fault_message: Some(format!(
-                        "CPU faulted before HALT: {:?}",
-                        cause
-                    )),
+                    fault_message: Some(format!("CPU faulted before HALT: {:?}", cause)),
                 };
             }
             StepOutcome::TrapDispatch { cause } => {
@@ -254,10 +249,7 @@ fn run_test_block(
                     end_line: block.end_line,
                     assertion_results: Vec::new(),
                     faulted: true,
-                    fault_message: Some(format!(
-                        "Unexpected TRAP dispatch (cause={:#06X})",
-                        cause
-                    )),
+                    fault_message: Some(format!("Unexpected TRAP dispatch (cause={:#06X})", cause)),
                 };
             }
             StepOutcome::EventDispatch { event_id } => {
@@ -278,9 +270,7 @@ fn run_test_block(
                     end_line: block.end_line,
                     assertion_results: Vec::new(),
                     faulted: true,
-                    fault_message: Some(
-                        "Run loop exited without HALT or fault".to_string(),
-                    ),
+                    fault_message: Some("Run loop exited without HALT or fault".to_string()),
                 };
             }
         }

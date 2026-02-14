@@ -72,8 +72,8 @@ clear_all:
     HALT
 ```
 
-Verify initial glider. Each cell is a 16-bit word stored big-endian, so
-the alive value 0x0001 has 0x01 in the low (odd) byte.
+Verify initial glider. Each cell is a 16-bit word stored big-endian, so the
+alive value 0x0001 has 0x01 in the low (odd) byte.
 
 ```n1test
 ; Alive cells

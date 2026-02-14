@@ -31,6 +31,12 @@ You can also run crate-only checks:
 - `cargo clippy -p emulator-core --all-targets -- -D warnings`
 - `cargo test -p emulator-core`
 
+### ISA Conformance Tests
+
+The ISA test suite validates instruction behavior using literate markdown
+programs in `tests/isa/*.n1.md`. Each test file targets a specific instruction
+class. Tests run automatically with `cargo test` via `tests/isa_conformance.rs`.
+
 ## Important constraints
 
 - Keep naming consistent: refer to the project as "Nullbyte Directive".
