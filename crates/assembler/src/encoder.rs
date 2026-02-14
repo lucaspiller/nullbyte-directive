@@ -116,12 +116,12 @@ pub fn encode_instruction(
     let (op, sub, _encoding) = instr.resolution;
 
     let rd = instr.rd.map_or(0, |r| r.0);
-    let ra = instr.ra.map_or(0, |r| r.0);
 
-    let (am, extension_word) = match &instr.operand {
-        None => (am::REGISTER_DIRECT, None),
-        Some(Operand::Register(_rb)) => (am::REGISTER_DIRECT, None),
+    let (ra, am, extension_word) = match &instr.operand {
+        None => (instr.ra.map_or(0, |r| r.0), am::REGISTER_DIRECT, None),
+        Some(Operand::Register(_rb)) => (instr.ra.map_or(0, |r| r.0), am::REGISTER_DIRECT, None),
         Some(Operand::Memory(mem)) => {
+            let ra = mem.base.0;
             if let Some(disp) = mem.displacement {
                 if !(-128..=127).contains(&disp) {
                     return Err(EncodeError {
@@ -132,12 +132,13 @@ pub fn encode_instruction(
                 let disp8 = disp as i8 as u8;
                 let ext_high = if disp8 & 0x80 != 0 { 0xFFu8 } else { 0x00u8 };
                 let ext = u16::from_be_bytes([ext_high, disp8]);
-                (am::SIGN_EXTENDED_DISPLACEMENT, Some(ext))
+                (ra, am::SIGN_EXTENDED_DISPLACEMENT, Some(ext))
             } else {
-                (am::REGISTER_INDIRECT, None)
+                (ra, am::REGISTER_INDIRECT, None)
             }
         }
         Some(Operand::Immediate(imm)) => {
+            let ra = instr.ra.map_or(0, |r| r.0);
             if imm.is_label {
                 let label_name = imm.label_name.as_ref().ok_or_else(|| EncodeError {
                     kind: EncodeErrorKind::InvalidEncoding("label reference without name".into()),
@@ -161,7 +162,7 @@ pub fn encode_instruction(
                     });
                 }
                 let ext = offset as i16 as u16;
-                (am::PC_RELATIVE, Some(ext))
+                (ra, am::PC_RELATIVE, Some(ext))
             } else {
                 let val = imm.value;
                 if !(0..=0xFFFF).contains(&val) {
@@ -173,9 +174,9 @@ pub fn encode_instruction(
                 let ext = val as u16;
                 let encoding = instr.resolution.2;
                 if encoding == OpcodeEncoding::Load || encoding == OpcodeEncoding::Store {
-                    (am::ZERO_EXTENDED_DISPLACEMENT, Some(ext))
+                    (ra, am::ZERO_EXTENDED_DISPLACEMENT, Some(ext))
                 } else {
-                    (am::IMMEDIATE, Some(ext))
+                    (ra, am::IMMEDIATE, Some(ext))
                 }
             }
         }
@@ -585,6 +586,74 @@ mod tests {
         let word = u16::from_be_bytes([bytes[0], bytes[1]]);
         assert_eq!((word >> 12) & 0xF, 0x7);
         assert_eq!((word >> 3) & 0x7, 0x1);
+    }
+
+    #[test]
+    fn encode_load_absolute_address() {
+        let parsed = parse_line("LOAD R0, #0x4000", 1).unwrap();
+        let symbols = SymbolTable::new();
+        let bytes = encode_line(&parsed, &symbols, 0, 1).unwrap();
+        assert_eq!(bytes.len(), 4);
+        let primary = u16::from_be_bytes([bytes[0], bytes[1]]);
+        let extension = u16::from_be_bytes([bytes[2], bytes[3]]);
+        assert_eq!((primary >> 12) & 0xF, 0x2);
+        assert_eq!(primary & 0x7, u16::from(am::ZERO_EXTENDED_DISPLACEMENT));
+        assert_eq!(extension, 0x4000);
+    }
+
+    #[test]
+    fn encode_store_absolute_address() {
+        let parsed = parse_line("STORE R1, #0x5000", 1).unwrap();
+        let symbols = SymbolTable::new();
+        let bytes = encode_line(&parsed, &symbols, 0, 1).unwrap();
+        assert_eq!(bytes.len(), 4);
+        let primary = u16::from_be_bytes([bytes[0], bytes[1]]);
+        let extension = u16::from_be_bytes([bytes[2], bytes[3]]);
+        assert_eq!((primary >> 12) & 0xF, 0x3);
+        assert_eq!(primary & 0x7, u16::from(am::ZERO_EXTENDED_DISPLACEMENT));
+        assert_eq!(extension, 0x5000);
+    }
+
+    #[test]
+    fn roundtrip_load_indirect_through_decoder() {
+        let parsed = parse_line("LOAD R4, [R5]", 1).unwrap();
+        let symbols = SymbolTable::new();
+        let bytes = encode_line(&parsed, &symbols, 0, 1).unwrap();
+        let word = u16::from_be_bytes([bytes[0], bytes[1]]);
+
+        let decoded = Decoder::decode(word);
+        match decoded {
+            DecodedOrFault::Instruction(instr) => {
+                assert_eq!(instr.encoding, OpcodeEncoding::Load);
+                assert_eq!(instr.rd, Some(emulator_core::decoder::RegisterField::R4));
+                assert_eq!(instr.ra, Some(emulator_core::decoder::RegisterField::R5));
+            }
+            DecodedOrFault::Fault(_) => panic!("LOAD should decode successfully"),
+        }
+    }
+
+    #[test]
+    fn roundtrip_jmp_through_decoder() {
+        let mut symbols = SymbolTable::new();
+        symbols.insert(
+            "dest".to_string(),
+            crate::symbols::Symbol {
+                address: 0x0020,
+                defined_at: 1,
+            },
+        );
+
+        let parsed = parse_line("JMP #dest", 1).unwrap();
+        let bytes = encode_line(&parsed, &symbols, 0x0000, 1).unwrap();
+        let primary = u16::from_be_bytes([bytes[0], bytes[1]]);
+
+        let decoded = Decoder::decode(primary);
+        match decoded {
+            DecodedOrFault::Instruction(instr) => {
+                assert_eq!(instr.encoding, OpcodeEncoding::Jmp);
+            }
+            DecodedOrFault::Fault(_) => panic!("JMP should decode successfully"),
+        }
     }
 
     #[test]
