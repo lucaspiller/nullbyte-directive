@@ -3,14 +3,14 @@
   export let memory;
   export let wasmCore;
 
-  const NUM_BEFORE = 3;
-  const NUM_AFTER = 5;
+  const NUM_INSTRUCTIONS = 8;
 
+  // Include memory in reactive deps to trigger re-disassembly after program load
   $: disassembledInstructions = (() => {
-    if (!wasmCore) return [];
+    if (!wasmCore || !memory) return [];
     
     try {
-      const rows = wasmCore.disassemble_window(pc, NUM_BEFORE, NUM_AFTER);
+      const rows = wasmCore.disassemble_window(pc, 0, NUM_INSTRUCTIONS - 1);
       return rows.map(row => ({
         addr: row.addr_start,
         len: row.len_bytes,
