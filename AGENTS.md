@@ -11,8 +11,8 @@ Run these commands from the repository root:
 
 ### Emulator Core (`crates/emulator-core`)
 
-ISA implementation, memory models, deterministic execution.
-See @crates/emulator-core/AGENTS.md
+ISA implementation, memory models, deterministic execution. See
+@crates/emulator-core/AGENTS.md
 
 ### WASM Bindings (`crates/emulator-wasm`)
 
@@ -20,5 +20,5 @@ Bridging Rust logic to the browser.
 
 ### Debug Tool (`apps/debug-tool`)
 
-UI state, visualization, and user interaction.
-Stack: Svelte + Vite + Tailwind CSS.
+UI state, visualization, and user interaction. Stack: Svelte + Vite + Tailwind
+CSS.

@@ -1,0 +1,1 @@
+//! Top-level assembler pipeline.

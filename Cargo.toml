@@ -1,3 +1,6 @@
 [workspace]
-members = ["crates/emulator-core", "crates/emulator-wasm"]
+members = ["crates/assembler", "crates/emulator-core", "crates/emulator-wasm"]
 resolver = "2"
+
+[workspace.dependencies]
+emulator-core = { path = "crates/emulator-core" }

@@ -72,7 +72,8 @@ error-prone, unreadable, and does not scale beyond trivial programs.
 - Extension word emission for addressing modes that require them (AM 010, 011,
   100, 101).
 - Labels for branch/jump targets and data references.
-- Numeric literals: decimal, hexadecimal (`0x`-prefixed), binary (`0b`-prefixed).
+- Numeric literals: decimal, hexadecimal (`0x`-prefixed), binary
+  (`0b`-prefixed).
 - Named register operands (`R0`–`R7`).
 - Comment syntax: `;` to end of line.
 - Data directives: `.word` (16-bit), `.byte` (8-bit), `.ascii`, `.zero`.
@@ -105,9 +106,9 @@ Example:
 ````markdown
 # Blinker: RAM Toggle Demo
 
-This program demonstrates basic memory writes by toggling a byte in RAM
-between `0xFF` and `0x00` on each tick. It exercises MOV, STORE, LOAD,
-XOR, and HALT instructions.
+This program demonstrates basic memory writes by toggling a byte in RAM between
+`0xFF` and `0x00` on each tick. It exercises MOV, STORE, LOAD, XOR, and HALT
+instructions.
 
 ## Initialization
 
@@ -122,8 +123,8 @@ init:
 
 ## Main Loop
 
-Each tick, XOR the current value with the mask and store it. Then halt
-to wait for the next tick boundary.
+Each tick, XOR the current value with the mask and store it. Then halt to wait
+for the next tick boundary.
 
 ```n1asm
 main:
@@ -133,15 +134,15 @@ main:
     JMP #main           ; resume at top of loop
 ```
 
-The memory view in the debugger will show address `0x4000` alternating
-between `00` and `FF` on each step-tick cycle.
+The memory view in the debugger will show address `0x4000` alternating between
+`00` and `FF` on each step-tick cycle.
 ````
 
 ### Plain Assembly (`*.n1`)
 
-Files without the `.md` extension are treated as plain assembly. The entire
-file content is assembly source. Comments use `;` to end of line. No Markdown
-parsing is performed.
+Files without the `.md` extension are treated as plain assembly. The entire file
+content is assembly source. Comments use `;` to end of line. No Markdown parsing
+is performed.
 
 ```
 ; Blinker: RAM Toggle Demo
@@ -166,28 +167,28 @@ Instructions follow this general pattern:
 
 Addressing modes are expressed through operand syntax:
 
-| Syntax             | Addressing Mode        | AM bits | Extension? |
-| ------------------ | ---------------------- | ------- | ---------- |
-| `RB`               | Register direct        | 000     | No         |
-| `[RA]`             | Register indirect      | 001     | No         |
-| `[RA + disp8]`     | Reg + signed disp8     | 010     | Yes (disp) |
-| `#abs16`           | Absolute / Immediate   | 011/100 | Yes (ext)  |
-| `#label`           | PC-relative (resolved) | 101     | Yes (ext)  |
+| Syntax         | Addressing Mode        | AM bits | Extension? |
+| -------------- | ---------------------- | ------- | ---------- |
+| `RB`           | Register direct        | 000     | No         |
+| `[RA]`         | Register indirect      | 001     | No         |
+| `[RA + disp8]` | Reg + signed disp8     | 010     | Yes (disp) |
+| `#abs16`       | Absolute / Immediate   | 011/100 | Yes (ext)  |
+| `#label`       | PC-relative (resolved) | 101     | Yes (ext)  |
 
-The assembler determines the correct addressing mode from the operand form.
-For branch and jump instructions, label references are resolved as PC-relative
+The assembler determines the correct addressing mode from the operand form. For
+branch and jump instructions, label references are resolved as PC-relative
 offsets (AM 101). For MOV and ALU immediate forms, `#value` uses AM 100. For
 LOAD/STORE with `#addr`, the assembler uses AM 011 (absolute).
 
 ### Data Directives
 
-| Directive        | Description                                     |
-| ---------------- | ----------------------------------------------- |
-| `.org addr`      | Set the output position counter to `addr`.      |
-| `.word val`      | Emit a 16-bit value (big-endian).               |
-| `.byte val`      | Emit an 8-bit value.                            |
-| `.ascii "str"`   | Emit ASCII bytes (no null terminator).           |
-| `.zero count`    | Emit `count` zero bytes.                        |
+| Directive      | Description                                |
+| -------------- | ------------------------------------------ |
+| `.org addr`    | Set the output position counter to `addr`. |
+| `.word val`    | Emit a 16-bit value (big-endian).          |
+| `.byte val`    | Emit an 8-bit value.                       |
+| `.ascii "str"` | Emit ASCII bytes (no null terminator).     |
+| `.zero count`  | Emit `count` zero bytes.                   |
 
 ## Shared Infrastructure with `emulator-core`
 
@@ -200,18 +201,18 @@ The assembler depends on `emulator-core` for:
 2. **`OpcodeEncoding` enum**: Used to match parsed mnemonic strings to their
    canonical encoding variants.
 
-3. **Memory map constants** (`ROM_START`, `ROM_END`, `RAM_START`, etc.):
-   Used for address validation and warnings (e.g., code placed outside ROM).
+3. **Memory map constants** (`ROM_START`, `ROM_END`, `RAM_START`, etc.): Used
+   for address validation and warnings (e.g., code placed outside ROM).
 
-If `emulator-core` adds a new opcode to the encoding table, the assembler
-should be able to support it by adding the corresponding mnemonic-to-encoding
-mapping without duplicating the bit-level encoding logic.
+If `emulator-core` adds a new opcode to the encoding table, the assembler should
+be able to support it by adding the corresponding mnemonic-to-encoding mapping
+without duplicating the bit-level encoding logic.
 
-The assembler should not depend on `emulator-core` features that pull in
-runtime execution machinery (decoder, execute pipeline, state model). Only the
-`encoding` and `memory::map` modules are needed. If those modules are
-behind a feature gate, use it; otherwise, direct dependency on the full crate
-is acceptable for `v0.1`.
+The assembler should not depend on `emulator-core` features that pull in runtime
+execution machinery (decoder, execute pipeline, state model). Only the
+`encoding` and `memory::map` modules are needed. If those modules are behind a
+feature gate, use it; otherwise, direct dependency on the full crate is
+acceptable for `v0.1`.
 
 ## CLI Interface
 
@@ -271,8 +272,8 @@ Extension word rules by addressing mode:
 
 - AM 000 (register direct): no extension word.
 - AM 001 (register indirect): no extension word.
-- AM 010 (reg + disp8): extension word with sign-extended displacement.
-  Low byte = disp8, high byte = sign copy (0x00 or 0xFF).
+- AM 010 (reg + disp8): extension word with sign-extended displacement. Low byte
+  = disp8, high byte = sign copy (0x00 or 0xFF).
 - AM 011 (absolute): extension word = 16-bit absolute address.
 - AM 100 (immediate): extension word = 16-bit immediate value.
 - AM 101 (PC-relative): extension word = signed 16-bit offset from PC_next.
@@ -308,8 +309,8 @@ Each error includes: file path, line number (in source, not extracted), column
 ### Integration Tests
 
 - Assemble a known source file and compare output bytes against expected binary.
-- Round-trip: assemble a program, load it into `emulator-core`, step through
-  it, and verify expected register/memory state.
+- Round-trip: assemble a program, load it into `emulator-core`, step through it,
+  and verify expected register/memory state.
 - Assemble the reference test programs (see below) and validate in the debug
   tool.
 
@@ -340,8 +341,8 @@ assembler and debug tool are validated with simpler programs.
 
 ## Milestones
 
-1. M1: Crate scaffold, CLI skeleton, literate format parser, mnemonic table
-   from `emulator-core`.
+1. M1: Crate scaffold, CLI skeleton, literate format parser, mnemonic table from
+   `emulator-core`.
 2. M2: Two-pass assembler for core instruction set (all 41 opcodes, all
    addressing modes, labels, data directives).
 3. M3: Error reporting, edge cases, unit and integration test suite.
@@ -364,5 +365,5 @@ assembler and debug tool are validated with simpler programs.
 
 - `emulator-core` (workspace crate): encoding table, memory map constants.
 - Standard Rust toolchain (same as workspace).
-- No external crate dependencies required for `v0.1`; standard library I/O
-  and string handling should suffice.
+- No external crate dependencies required for `v0.1`; standard library I/O and
+  string handling should suffice.
