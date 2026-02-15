@@ -76,3 +76,25 @@ multi_in:
 R2 == 0x0000
 R3 == 0x0000
 ```
+
+## STORE Immediate to MMIO
+
+Tests STORE with immediate addressing mode (#addr) to MMIO addresses. This
+verifies that LOAD/STORE with absolute immediate addresses execute without
+faulting. The NullMmio in the test runner denies/suppresses writes, so we only
+verify execution succeeds.
+
+```n1asm
+store_mmio:
+    MOV R1, #0x0001
+    STORE R1, #0xE124    ; Write to PAGE_BASE (0xE124) - should not fault
+    MOV R2, #0x0002
+    STORE R2, #0xE122    ; Write to CTRL (0xE122) - should not fault
+    HALT
+```
+
+The key test is that the instruction executes without faulting:
+
+```n1test
+R2 == 0x0002
+```

@@ -501,4 +501,71 @@ mod tests {
         mmio.tick();
         // Should not panic
     }
+
+    #[test]
+    fn tele7_execution_flow() {
+        use crate::{step_one, CoreConfig, CoreState, GeneralRegister, StepOutcome};
+
+        let mut state = CoreState::default();
+        let config = CoreConfig::default();
+        let mut mmio =
+            CompositeMmio::new().with_tele7(Tele7Peripheral::new(Tele7Config::default()));
+
+        // MOV R1, #0x4100
+        state.memory[0] = 0x12;
+        state.memory[1] = 0x05;
+        state.memory[2] = 0x41;
+        state.memory[3] = 0x00;
+        // STORE R1, #0xE124 (Immediate mode: primary=0x3205, ext=0xE124)
+        state.memory[4] = 0x32;
+        state.memory[5] = 0x05;
+        state.memory[6] = 0xE1;
+        state.memory[7] = 0x24;
+        // MOV R1, #0x0001
+        state.memory[8] = 0x12;
+        state.memory[9] = 0x05;
+        state.memory[10] = 0x00;
+        state.memory[11] = 0x01;
+        // STORE R1, #0xE122 (Immediate mode: primary=0x3205, ext=0xE122)
+        state.memory[12] = 0x32;
+        state.memory[13] = 0x05;
+        state.memory[14] = 0xE1;
+        state.memory[15] = 0x22;
+        // HALT
+        state.memory[16] = 0x00;
+        state.memory[17] = 0x10;
+
+        // Execute MOV R1, #0x4100
+        let outcome = step_one(&mut state, &mut mmio, &config);
+        assert!(matches!(outcome, StepOutcome::Retired { .. }));
+        assert_eq!(state.arch.gpr(GeneralRegister::R1), 0x4100);
+
+        // Execute STORE R1, #0xE124
+        let outcome = step_one(&mut state, &mut mmio, &config);
+        assert!(matches!(outcome, StepOutcome::Retired { .. }));
+
+        // Verify PAGE_BASE was written
+        let t7 = mmio.tele7().unwrap();
+        assert_eq!(t7.state().page_base, 0x4100);
+
+        // Execute MOV R1, #0x0001
+        let outcome = step_one(&mut state, &mut mmio, &config);
+        assert!(matches!(outcome, StepOutcome::Retired { .. }));
+        assert_eq!(state.arch.gpr(GeneralRegister::R1), 0x0001);
+
+        // Execute STORE R1, #0xE122
+        let outcome = step_one(&mut state, &mut mmio, &config);
+        assert!(matches!(outcome, StepOutcome::Retired { .. }));
+
+        // Verify CTRL was written - TELE-7 should now be enabled
+        let t7 = mmio.tele7().unwrap();
+        assert!(
+            t7.state().is_enabled(),
+            "TELE-7 should be enabled after writing CTRL=1"
+        );
+
+        // Execute HALT
+        let outcome = step_one(&mut state, &mut mmio, &config);
+        assert!(matches!(outcome, StepOutcome::HaltedForTick));
+    }
 }

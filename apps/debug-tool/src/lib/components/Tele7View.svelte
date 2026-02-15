@@ -101,17 +101,21 @@
     </span>
   </div>
   
-  <div class="flex-1 overflow-auto p-1 font-mono text-xs leading-tight" 
-       style="background-color: {COLOR_PALETTE[tele7State?.border_color || 0] || '#000000'}">
-    {#each rows as row, r}
-      <div class="flex">
-        {#each row as cell, c}
-          <span 
-            class="inline-block w-3 text-center"
-            style="color: {getFgColor(cell.fg)}; background-color: {getBgColor(cell.bg)};"
-          >{cell.char}</span>
+  <div class="flex-1 p-1 overflow-hidden" style="background-color: {COLOR_PALETTE[tele7State?.border_color || 0] || '#000000'}">
+    <div class="w-full h-full flex items-center justify-center overflow-hidden">
+      <div
+        class="grid w-full max-h-full font-mono leading-none text-[10px]"
+        style="aspect-ratio: 40 / 25; grid-template-columns: repeat(40, minmax(0, 1fr)); grid-template-rows: repeat(25, minmax(0, 1fr));"
+      >
+        {#each rows as row}
+          {#each row as cell}
+            <span
+              class="inline-flex items-center justify-center overflow-hidden whitespace-pre"
+              style="color: {getFgColor(cell.fg)}; background-color: {getBgColor(cell.bg)};"
+            >{cell.char}</span>
+          {/each}
         {/each}
       </div>
-    {/each}
+    </div>
   </div>
 </div>

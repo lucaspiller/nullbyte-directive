@@ -228,6 +228,14 @@ impl WasmCore {
         js_sys::Uint8Array::from(self.state.memory.as_ref())
     }
 
+    /// Returns whether TELE-7 is currently enabled.
+    #[must_use]
+    pub fn tele7_enabled(&self) -> bool {
+        self.mmio
+            .tele7()
+            .is_some_and(|tele7| tele7.state().is_enabled())
+    }
+
     /// Disassembles a window of instructions around the given program counter.
     ///
     /// Returns a JSON array of disassembly rows. Each row contains:
@@ -365,5 +373,39 @@ mod tests {
         let outcome = core.run_internal(WasmRunBoundary::Fault.into());
         assert_eq!(outcome.steps, 1);
         assert!(matches!(outcome.final_step, WasmStepOutcome::Fault { .. }));
+    }
+
+    #[test]
+    fn tele7_self_test_source_enables_display_via_wasm_api() {
+        let mut core = WasmCore::new();
+        let source = include_str!("../../../programs/tele7_self_test.n1.md");
+
+        core.assemble_and_load_program(source, "tele7_self_test.n1.md")
+            .expect("source assembly should succeed");
+
+        for _ in 0..4 {
+            let _ = core.step_internal();
+        }
+
+        assert!(
+            core.tele7_enabled(),
+            "TELE-7 should be enabled after self-test init sequence"
+        );
+    }
+
+    #[test]
+    fn tele7_self_test_markdown_raw_bytes_do_not_enable_display() {
+        let mut core = WasmCore::new();
+        let source = include_str!("../../../programs/tele7_self_test.n1.md");
+
+        core.load_program(source.as_bytes());
+        for _ in 0..4 {
+            let _ = core.step_internal();
+        }
+
+        assert!(
+            !core.tele7_enabled(),
+            "raw markdown bytes should not accidentally enable TELE-7"
+        );
     }
 }

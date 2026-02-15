@@ -3,8 +3,6 @@
 //! This module implements the encoding phase of assembly: converting parsed
 //! instructions and directives into binary bytes suitable for ROM loading.
 
-use emulator_core::OpcodeEncoding;
-
 use crate::parser::{Directive, InstructionSize, Operand, ParsedInstruction, ParsedLine};
 use crate::symbols::SymbolTable;
 
@@ -21,6 +19,7 @@ mod am {
     pub const REGISTER_DIRECT: u8 = 0b000;
     pub const REGISTER_INDIRECT: u8 = 0b001;
     pub const SIGN_EXTENDED_DISPLACEMENT: u8 = 0b010;
+    #[allow(dead_code)]
     pub const ZERO_EXTENDED_DISPLACEMENT: u8 = 0b011;
     pub const IMMEDIATE: u8 = 0b101;
     pub const PC_RELATIVE: u8 = 0b101;
@@ -186,12 +185,7 @@ pub fn encode_instruction(
                     });
                 }
                 let ext = val as u16;
-                let encoding = instr.resolution.2;
-                if encoding == OpcodeEncoding::Load || encoding == OpcodeEncoding::Store {
-                    (ra, am::ZERO_EXTENDED_DISPLACEMENT, Some(ext))
-                } else {
-                    (ra, am::IMMEDIATE, Some(ext))
-                }
+                (ra, am::IMMEDIATE, Some(ext))
             }
         }
     };
@@ -268,7 +262,7 @@ pub fn encode_line(
 mod tests {
     use super::*;
     use crate::parser::parse_line;
-    use emulator_core::{DecodedOrFault, Decoder};
+    use emulator_core::{DecodedOrFault, Decoder, OpcodeEncoding};
 
     #[test]
     fn encode_primary_word_layout() {
@@ -615,7 +609,7 @@ mod tests {
         let primary = u16::from_be_bytes([bytes[0], bytes[1]]);
         let extension = u16::from_be_bytes([bytes[2], bytes[3]]);
         assert_eq!((primary >> 12) & 0xF, 0x2);
-        assert_eq!(primary & 0x7, u16::from(am::ZERO_EXTENDED_DISPLACEMENT));
+        assert_eq!(primary & 0x7, u16::from(am::IMMEDIATE));
         assert_eq!(extension, 0x4000);
     }
 
@@ -628,7 +622,7 @@ mod tests {
         let primary = u16::from_be_bytes([bytes[0], bytes[1]]);
         let extension = u16::from_be_bytes([bytes[2], bytes[3]]);
         assert_eq!((primary >> 12) & 0xF, 0x3);
-        assert_eq!(primary & 0x7, u16::from(am::ZERO_EXTENDED_DISPLACEMENT));
+        assert_eq!(primary & 0x7, u16::from(am::IMMEDIATE));
         assert_eq!(extension, 0x5000);
     }
 
@@ -1128,11 +1122,7 @@ mod tests {
             );
             let primary = u16::from_be_bytes([bytes[0], bytes[1]]);
             let am = (primary & 0x7) as u8;
-            assert_eq!(
-                am,
-                am::ZERO_EXTENDED_DISPLACEMENT,
-                "{name}: expected AM=011"
-            );
+            assert_eq!(am, am::IMMEDIATE, "{name}: expected AM=101");
         }
 
         let mut symbols = SymbolTable::new();
