@@ -7,17 +7,18 @@
 //! 2. **Pass 1**: Parsing and symbol table construction
 //! 3. **Pass 2**: Encoding to binary output
 //!
-//! The main entry point is [`assemble`], which takes a source file path and
-//! returns the assembled binary plus collected test blocks.
+//! The main entry points are:
+//! - [`assemble`]: File-based assembly with include support
+//! - [`assemble_from_source`]: In-memory assembly for WASM/embedded use (no includes)
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::encoder::{encode_line, EncodeError};
 use crate::include::{
     expand_includes, format_include_chain, ExpandedLine, ExpandedTestBlock, IncludeError,
 };
-use crate::parser::{parse_line, ParsedLine};
-use crate::source::TestBlock;
+use crate::parser::{parse_line, Directive, ParsedLine};
+use crate::source::{extract_source, TestBlock};
 use crate::symbols::{assign_addresses_with_lines, Assignment, SymbolError};
 
 /// ROM region end address (inclusive) for address validation warnings.
@@ -189,6 +190,115 @@ pub fn assemble(path: &Path) -> Result<AssembleResult, AssembleError> {
 
     let test_blocks = expanded
         .test_blocks
+        .into_iter()
+        .map(|etb| {
+            let include_context = format_include_chain_for_test(&etb);
+            TestBlockContext {
+                block: etb.block,
+                include_context,
+            }
+        })
+        .collect();
+
+    Ok(AssembleResult {
+        binary,
+        test_blocks,
+        warnings,
+        listing,
+    })
+}
+
+/// Assembles source text in-memory without filesystem access.
+///
+/// This is the WASM-friendly entry point for assembly. It works with in-memory
+/// source text and does not support `.include` directives (returns an error).
+///
+/// # Arguments
+///
+/// * `source` - The source text (plain `.n1` or literate `.n1.md` format)
+/// * `file_name` - File name used for format detection (`.n1.md` suffix triggers literate mode)
+///
+/// # Errors
+///
+/// Returns `AssembleError` if:
+/// - The source contains `.include` directives (not supported in in-memory mode)
+/// - Parsing fails (invalid syntax, unknown mnemonic)
+/// - Symbol table construction fails (duplicate label, address overflow)
+/// - Encoding fails (undefined label, displacement out of range)
+#[allow(clippy::result_large_err)]
+pub fn assemble_from_source(
+    source: &str,
+    file_name: &str,
+) -> Result<AssembleResult, AssembleError> {
+    let path = PathBuf::from(file_name);
+    let extracted = extract_source(&path, source);
+
+    let mut expanded_lines = Vec::with_capacity(extracted.lines.len());
+    let mut expanded_test_blocks = Vec::with_capacity(extracted.test_blocks.len());
+
+    for test_block in extracted.test_blocks {
+        expanded_test_blocks.push(ExpandedTestBlock {
+            block: test_block,
+            file_path: path.clone(),
+            include_chain: Vec::new(),
+        });
+    }
+
+    for line in extracted.lines {
+        let parsed = parse_line(&line.text, line.original_line).map_err(|e| AssembleError {
+            kind: AssembleErrorKind::Parse(e.to_string()),
+            location: Some(SourceLocation {
+                file: file_name.to_string(),
+                line: line.original_line,
+                include_chain: String::new(),
+            }),
+        })?;
+
+        if matches!(
+            parsed,
+            ParsedLine::Directive {
+                directive: Directive::Include(_),
+            }
+        ) {
+            return Err(AssembleError {
+                kind: AssembleErrorKind::Include(IncludeError {
+                    path,
+                    include_chain: Vec::new(),
+                    kind: crate::include::IncludeErrorKind::IoError(
+                        ".include not supported in in-memory mode".to_string(),
+                    ),
+                }),
+                location: Some(SourceLocation {
+                    file: file_name.to_string(),
+                    line: line.original_line,
+                    include_chain: String::new(),
+                }),
+            });
+        }
+
+        expanded_lines.push(ExpandedLine {
+            text: line.text,
+            original_line: line.original_line,
+            file_path: path.clone(),
+            include_chain: Vec::new(),
+        });
+    }
+
+    let parsed = parse_expanded_lines(&expanded_lines)?;
+
+    let source_lines: Vec<usize> = parsed.iter().map(|p| p.source_line).collect();
+    let parsed_lines: Vec<ParsedLine> = parsed.iter().map(|p| p.parsed.clone()).collect();
+
+    let assignment = assign_addresses_with_lines(&parsed_lines, 0, &source_lines).map_err(|e| {
+        AssembleError {
+            kind: AssembleErrorKind::Symbol(e),
+            location: None,
+        }
+    })?;
+
+    let (binary, warnings, listing) = encode_pass2(&assignment, &expanded_lines)?;
+
+    let test_blocks = expanded_test_blocks
         .into_iter()
         .map(|etb| {
             let include_context = format_include_chain_for_test(&etb);
