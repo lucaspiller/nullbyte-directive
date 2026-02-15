@@ -138,10 +138,24 @@ pub const fn line_size(parsed: &ParsedLine) -> u16 {
 const fn directive_size(directive: &Directive) -> u16 {
     match directive {
         Directive::Org(_) | Directive::Include(_) => 0,
-        Directive::Word(_) => 2,
+        Directive::Word(_) | Directive::TwChar(_) => 2,
         Directive::Byte(_) => 1,
         Directive::Ascii(s) => s.len() as u16,
         Directive::Zero(count) => *count as u16,
+        Directive::TString(ops) => {
+            let char_count = ops.text.len();
+            let padded = if let Some(min) = ops.min_chars {
+                if char_count > min {
+                    char_count
+                } else {
+                    min
+                }
+            } else {
+                char_count
+            };
+            let word_count = padded.div_ceil(2);
+            (word_count * 2) as u16
+        }
     }
 }
 

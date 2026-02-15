@@ -621,4 +621,24 @@ R0 == 0x0001
         assert_eq!(result.lines[1].text, "ADD R0, R0, R1");
         assert_eq!(result.lines[2].text, "HALT");
     }
+
+    #[test]
+    fn tele7_directives_in_included_file() {
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        let included_content = ".twchar \"AB\"\n.tstring \"HELLO\"\n";
+        let included_path = create_temp_file(temp_dir.path(), "data.n1", included_content);
+
+        let main_content = format!(
+            ".org 0x4100\n.include \"{}\"\n",
+            included_path.file_name().unwrap().to_str().unwrap()
+        );
+        let main_path = create_temp_file(temp_dir.path(), "main.n1", &main_content);
+
+        let result = expand_includes(&main_path).unwrap();
+        assert_eq!(result.lines.len(), 3);
+        assert_eq!(result.lines[0].text, ".org 0x4100");
+        assert_eq!(result.lines[1].text, ".twchar \"AB\"");
+        assert_eq!(result.lines[2].text, ".tstring \"HELLO\"");
+    }
 }

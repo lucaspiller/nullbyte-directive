@@ -199,6 +199,86 @@ LOAD/STORE with `#addr`, the assembler uses AM 011 (absolute).
 | `.ascii "str"` | Emit ASCII bytes (no null terminator).     |
 | `.zero count`  | Emit `count` zero bytes.                   |
 
+### Text Directives
+
+These directives simplify text / character handling given the restriction of
+only reading words, not bytes. They are useful when working with textual devices
+such as the TELE-7 Textual Display Device.
+
+| Directive           | Description                                    |
+| ------------------- | ---------------------------------------------- |
+| `.twchar "AB"`      | Pack two chars into one 16-bit word (0x4142)   |
+| `.twchar $FG1, 'A'` | Pack control token + char (0x0141)             |
+| `.tstring "HELLO"`  | Pack string, 2 chars/word, space-padded if odd |
+| `.tstring "HI", 10` | Pack string padded to N chars minimum          |
+
+#### `.twchar` - Textual Word Character
+
+Packs two bytes into a single 16-bit word. The first byte occupies the high byte
+(bits 8-15), the second occupies the low byte (bits 0-7).
+
+Syntax forms:
+
+```
+.twchar "AB"         ; String: exactly 2 chars -> 0x4142
+.twchar 'A', 'B'     ; Two char literals -> 0x4142
+.twchar 0x01, 0x41   ; Two hex bytes -> 0x0141
+.twchar $FG1, 'A'    ; Named token + char -> 0x0141
+```
+
+The operand forms can be mixed: a control token followed by a character, a
+character followed by a control token, or two characters.
+
+#### `.tstring` - Textual Packed String
+
+Packs a string into TELE-7 word format (two characters per word). If the string
+has odd length, it is padded with a space character (0x20).
+
+```
+.tstring "HELLO"    ; Emits: 0x4845 0x4C4C 0x4F20
+                    ;        "HE"   "LL"   "O "
+```
+
+Optional second argument specifies a minimum character count. The output is
+padded with spaces to reach this length:
+
+```
+.tstring "HI", 10   ; Emits 5 words (10 chars): "HI        "
+```
+
+The string argument supports inline control tokens using `\xNN` escape syntax
+for raw bytes.
+
+#### Error Handling
+
+- `.twchar` with wrong operand count: "twchar requires exactly 2 bytes"
+- `.twchar` string not 2 chars: "twchar string must be exactly 2 characters"
+- `.tstring` with invalid escape: "invalid escape sequence in tstring"
+
+#### TELE-7 Control Tokens
+
+These shorthands represent tokens for TELE-7 control codes (0x00-0x1F). These
+can be used in any expression context.
+
+| Token         | Value | Description         |
+| ------------- | ----- | ------------------- |
+| `$FG0`-`$FG7` | 0-7   | Foreground colors   |
+| `$BG0`-`$BG7` | 16-23 | Background colors   |
+| `$MOSAIC_ON`  | 24    | Enable mosaic mode  |
+| `$MOSAIC_OFF` | 25    | Disable mosaic mode |
+| `$FLASH_ON`   | 26    | Enable flash mode   |
+| `$FLASH_OFF`  | 27    | Disable flash mode  |
+
+Example:
+
+```
+.twchar $FG1, $BG0      ; Set red fg, black bg -> 0x0110
+.twchar $FLASH_ON, '!'  ; Flashing exclamation -> 0x1A21
+```
+
+See the TELE-7 Textual Display Device specification for further information on
+what these mean.
+
 ### Include Directive
 
 The `.include` directive splices another source file into the current assembly

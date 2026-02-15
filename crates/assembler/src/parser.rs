@@ -94,6 +94,71 @@ pub enum Directive {
     Zero(usize),
     /// `.include "path"` - include another source file.
     Include(String),
+    /// `.twchar "AB"` or `.twchar byte1, byte2` - pack two bytes into one 16-bit word.
+    TwChar(TwCharOperands),
+    /// `.tstring "text"` or `.tstring "text", min_chars` - pack string for TELE-7.
+    TString(TStringOperands),
+}
+
+/// Operands for `.twchar` directive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TwCharOperands {
+    /// First byte (high byte in result word).
+    pub high: TwCharOperand,
+    /// Second byte (low byte in result word).
+    pub low: TwCharOperand,
+}
+
+/// Single operand for `.twchar`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TwCharOperand {
+    /// A literal character.
+    Char(char),
+    /// A numeric value (0-255).
+    Byte(u8),
+    /// A named TELE-7 control token.
+    ControlToken(Tele7ControlToken),
+}
+
+/// Named TELE-7 control codes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tele7ControlToken {
+    /// Foreground color 0-7 ($FG0-$FG7).
+    Fg(u8),
+    /// Background color 0-7 ($BG0-$BG7).
+    Bg(u8),
+    /// Mosaic mode on ($`MOSAIC_ON`).
+    MosaicOn,
+    /// Mosaic mode off ($`MOSAIC_OFF`).
+    MosaicOff,
+    /// Flash mode on ($`FLASH_ON`).
+    FlashOn,
+    /// Flash mode off ($`FLASH_OFF`).
+    FlashOff,
+}
+
+impl Tele7ControlToken {
+    /// Returns the byte value for this control token.
+    #[must_use]
+    pub const fn value(self) -> u8 {
+        match self {
+            Self::Fg(n) => n,
+            Self::Bg(n) => 0x10 + n,
+            Self::MosaicOn => 0x18,
+            Self::MosaicOff => 0x19,
+            Self::FlashOn => 0x1A,
+            Self::FlashOff => 0x1B,
+        }
+    }
+}
+
+/// Operands for `.tstring` directive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TStringOperands {
+    /// The string content.
+    pub text: String,
+    /// Optional minimum character count (padded with spaces).
+    pub min_chars: Option<usize>,
 }
 
 /// A single parsed source line.
@@ -284,6 +349,14 @@ fn parse_directive(text: &str, line_number: usize) -> ParseResult {
             let path = parse_include_path(args, line_number)?;
             Directive::Include(path)
         }
+        "twchar" => {
+            let operands = parse_twchar_operands(args, line_number)?;
+            Directive::TwChar(operands)
+        }
+        "tstring" => {
+            let operands = parse_tstring_operands(args, line_number)?;
+            Directive::TString(operands)
+        }
         _ => {
             return Err(ParseError {
                 location: SourceLocation {
@@ -360,6 +433,114 @@ fn parse_string_literal(s: &str, line: usize) -> Result<String, ParseError> {
 
 fn parse_include_path(s: &str, line: usize) -> Result<String, ParseError> {
     parse_string_literal(s, line)
+}
+
+fn parse_twchar_operands(s: &str, line: usize) -> Result<TwCharOperands, ParseError> {
+    let trimmed = s.trim();
+
+    if trimmed.starts_with('"') {
+        let str_content = parse_string_literal(trimmed, line)?;
+        let chars: Vec<char> = str_content.chars().collect();
+        if chars.len() != 2 {
+            return Err(ParseError {
+                location: SourceLocation { line, column: 1 },
+                kind: ParseErrorKind::InvalidDirectiveValue(
+                    "twchar string must be exactly 2 characters".into(),
+                ),
+            });
+        }
+        return Ok(TwCharOperands {
+            high: TwCharOperand::Char(chars[0]),
+            low: TwCharOperand::Char(chars[1]),
+        });
+    }
+
+    let tokens: Vec<&str> = trimmed.split(',').map(str::trim).collect();
+    if tokens.len() != 2 {
+        return Err(ParseError {
+            location: SourceLocation { line, column: 1 },
+            kind: ParseErrorKind::InvalidDirectiveValue("twchar requires exactly 2 bytes".into()),
+        });
+    }
+
+    let high = parse_twchar_single_operand(tokens[0], line)?;
+    let low = parse_twchar_single_operand(tokens[1], line)?;
+
+    Ok(TwCharOperands { high, low })
+}
+
+fn parse_twchar_single_operand(s: &str, line: usize) -> Result<TwCharOperand, ParseError> {
+    let trimmed = s.trim();
+
+    if let Some(token) = parse_tele7_control_token(trimmed) {
+        return Ok(TwCharOperand::ControlToken(token));
+    }
+
+    if trimmed.starts_with('\'') && trimmed.ends_with('\'') && trimmed.len() == 3 {
+        let ch = trimmed.chars().nth(1).unwrap();
+        return Ok(TwCharOperand::Char(ch));
+    }
+
+    let val = parse_numeric_value(trimmed, line)?;
+    let byte = u8::try_from(val).map_err(|_| ParseError {
+        location: SourceLocation { line, column: 1 },
+        kind: ParseErrorKind::InvalidDirectiveValue(format!("byte value out of range: {trimmed}")),
+    })?;
+    Ok(TwCharOperand::Byte(byte))
+}
+
+fn parse_tele7_control_token(s: &str) -> Option<Tele7ControlToken> {
+    let upper = s.to_ascii_uppercase();
+    if let Some(rest) = upper.strip_prefix("$FG") {
+        let n: u8 = rest.parse().ok()?;
+        return (n <= 7).then_some(Tele7ControlToken::Fg(n));
+    }
+    if let Some(rest) = upper.strip_prefix("$BG") {
+        let n: u8 = rest.parse().ok()?;
+        return (n <= 7).then_some(Tele7ControlToken::Bg(n));
+    }
+    match upper.as_str() {
+        "$MOSAIC_ON" => Some(Tele7ControlToken::MosaicOn),
+        "$MOSAIC_OFF" => Some(Tele7ControlToken::MosaicOff),
+        "$FLASH_ON" => Some(Tele7ControlToken::FlashOn),
+        "$FLASH_OFF" => Some(Tele7ControlToken::FlashOff),
+        _ => None,
+    }
+}
+
+fn parse_tstring_operands(s: &str, line: usize) -> Result<TStringOperands, ParseError> {
+    let trimmed = s.trim();
+
+    let (str_part, min_chars) = if let Some(stripped) = trimmed.strip_prefix('"') {
+        let end_quote = stripped.find('"');
+        let end_pos = end_quote.ok_or(ParseError {
+            location: SourceLocation { line, column: 1 },
+            kind: ParseErrorKind::UnterminatedString,
+        })?;
+        let str_content = stripped[..end_pos].to_string();
+        let rest = stripped[end_pos + 1..].trim();
+        let min = if let Some(num_str) = rest.strip_prefix(',') {
+            let num_str = num_str.trim();
+            if num_str.is_empty() {
+                None
+            } else {
+                Some(parse_usize_value(num_str, line)?)
+            }
+        } else {
+            None
+        };
+        (str_content, min)
+    } else {
+        return Err(ParseError {
+            location: SourceLocation { line, column: 1 },
+            kind: ParseErrorKind::InvalidDirectiveValue("tstring requires a string literal".into()),
+        });
+    };
+
+    Ok(TStringOperands {
+        text: str_part,
+        min_chars,
+    })
 }
 
 fn parse_instruction(text: &str, line_number: usize) -> ParseResult {
@@ -1212,5 +1393,202 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn parse_twchar_string() {
+        let result = parse_line(".twchar \"AB\"", 1);
+        match result {
+            Ok(ParsedLine::Directive {
+                directive: Directive::TwChar(ops),
+            }) => {
+                assert_eq!(ops.high, TwCharOperand::Char('A'));
+                assert_eq!(ops.low, TwCharOperand::Char('B'));
+            }
+            _ => panic!("expected twchar directive"),
+        }
+    }
+
+    #[test]
+    fn parse_twchar_two_chars() {
+        let result = parse_line(".twchar 'A', 'B'", 1);
+        match result {
+            Ok(ParsedLine::Directive {
+                directive: Directive::TwChar(ops),
+            }) => {
+                assert_eq!(ops.high, TwCharOperand::Char('A'));
+                assert_eq!(ops.low, TwCharOperand::Char('B'));
+            }
+            _ => panic!("expected twchar directive"),
+        }
+    }
+
+    #[test]
+    fn parse_twchar_hex_bytes() {
+        let result = parse_line(".twchar 0x01, 0x41", 1);
+        match result {
+            Ok(ParsedLine::Directive {
+                directive: Directive::TwChar(ops),
+            }) => {
+                assert_eq!(ops.high, TwCharOperand::Byte(0x01));
+                assert_eq!(ops.low, TwCharOperand::Byte(0x41));
+            }
+            _ => panic!("expected twchar directive"),
+        }
+    }
+
+    #[test]
+    fn parse_twchar_control_token() {
+        let result = parse_line(".twchar $FG1, 'A'", 1);
+        match result {
+            Ok(ParsedLine::Directive {
+                directive: Directive::TwChar(ops),
+            }) => {
+                assert_eq!(
+                    ops.high,
+                    TwCharOperand::ControlToken(Tele7ControlToken::Fg(1))
+                );
+                assert_eq!(ops.low, TwCharOperand::Char('A'));
+            }
+            _ => panic!("expected twchar directive"),
+        }
+    }
+
+    #[test]
+    fn parse_twchar_control_tokens() {
+        let result = parse_line(".twchar $FG1, $BG0", 1);
+        match result {
+            Ok(ParsedLine::Directive {
+                directive: Directive::TwChar(ops),
+            }) => {
+                assert_eq!(
+                    ops.high,
+                    TwCharOperand::ControlToken(Tele7ControlToken::Fg(1))
+                );
+                assert_eq!(
+                    ops.low,
+                    TwCharOperand::ControlToken(Tele7ControlToken::Bg(0))
+                );
+            }
+            _ => panic!("expected twchar directive"),
+        }
+    }
+
+    #[test]
+    fn parse_twchar_mosaic_flash_tokens() {
+        let result = parse_line(".twchar $MOSAIC_ON, $FLASH_ON", 1);
+        match result {
+            Ok(ParsedLine::Directive {
+                directive: Directive::TwChar(ops),
+            }) => {
+                assert_eq!(
+                    ops.high,
+                    TwCharOperand::ControlToken(Tele7ControlToken::MosaicOn)
+                );
+                assert_eq!(
+                    ops.low,
+                    TwCharOperand::ControlToken(Tele7ControlToken::FlashOn)
+                );
+            }
+            _ => panic!("expected twchar directive"),
+        }
+    }
+
+    #[test]
+    fn error_twchar_wrong_string_length() {
+        let result = parse_line(".twchar \"ABC\"", 1);
+        assert!(matches!(
+            result,
+            Err(ParseError {
+                kind: ParseErrorKind::InvalidDirectiveValue(_),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn error_twchar_wrong_operand_count() {
+        let result = parse_line(".twchar 0x41", 1);
+        assert!(matches!(
+            result,
+            Err(ParseError {
+                kind: ParseErrorKind::InvalidDirectiveValue(_),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn parse_tstring_simple() {
+        let result = parse_line(".tstring \"HELLO\"", 1);
+        match result {
+            Ok(ParsedLine::Directive {
+                directive: Directive::TString(ops),
+            }) => {
+                assert_eq!(ops.text, "HELLO");
+                assert_eq!(ops.min_chars, None);
+            }
+            _ => panic!("expected tstring directive"),
+        }
+    }
+
+    #[test]
+    fn parse_tstring_with_min_chars() {
+        let result = parse_line(".tstring \"HI\", 10", 1);
+        match result {
+            Ok(ParsedLine::Directive {
+                directive: Directive::TString(ops),
+            }) => {
+                assert_eq!(ops.text, "HI");
+                assert_eq!(ops.min_chars, Some(10));
+            }
+            _ => panic!("expected tstring directive"),
+        }
+    }
+
+    #[test]
+    fn parse_tstring_empty() {
+        let result = parse_line(".tstring \"\"", 1);
+        match result {
+            Ok(ParsedLine::Directive {
+                directive: Directive::TString(ops),
+            }) => {
+                assert_eq!(ops.text, "");
+                assert_eq!(ops.min_chars, None);
+            }
+            _ => panic!("expected tstring directive"),
+        }
+    }
+
+    #[test]
+    fn tele7_control_token_values() {
+        assert_eq!(Tele7ControlToken::Fg(0).value(), 0x00);
+        assert_eq!(Tele7ControlToken::Fg(7).value(), 0x07);
+        assert_eq!(Tele7ControlToken::Bg(0).value(), 0x10);
+        assert_eq!(Tele7ControlToken::Bg(7).value(), 0x17);
+        assert_eq!(Tele7ControlToken::MosaicOn.value(), 0x18);
+        assert_eq!(Tele7ControlToken::MosaicOff.value(), 0x19);
+        assert_eq!(Tele7ControlToken::FlashOn.value(), 0x1A);
+        assert_eq!(Tele7ControlToken::FlashOff.value(), 0x1B);
+    }
+
+    #[test]
+    fn twchar_case_insensitive_tokens() {
+        let result = parse_line(".twchar $fg1, $bg2", 1);
+        match result {
+            Ok(ParsedLine::Directive {
+                directive: Directive::TwChar(ops),
+            }) => {
+                assert_eq!(
+                    ops.high,
+                    TwCharOperand::ControlToken(Tele7ControlToken::Fg(1))
+                );
+                assert_eq!(
+                    ops.low,
+                    TwCharOperand::ControlToken(Tele7ControlToken::Bg(2))
+                );
+            }
+            _ => panic!("expected twchar directive"),
+        }
     }
 }

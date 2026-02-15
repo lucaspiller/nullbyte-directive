@@ -233,6 +233,37 @@ pub fn encode_directive(
         Directive::Ascii(s) => Ok(s.as_bytes().to_vec()),
         Directive::Zero(count) => Ok(vec![0u8; *count]),
         Directive::Include(_) => Ok(Vec::new()),
+        Directive::TwChar(ops) => {
+            let high = twchar_operand_to_byte(&ops.high);
+            let low = twchar_operand_to_byte(&ops.low);
+            let word = (u16::from(high) << 8) | u16::from(low);
+            Ok(word.to_be_bytes().to_vec())
+        }
+        Directive::TString(ops) => {
+            let mut bytes = Vec::new();
+            let text = &ops.text;
+            let padded_len = ops.min_chars.map_or(text.len(), |min| text.len().max(min));
+            let padded_text: String = format!(
+                "{}{}",
+                text,
+                " ".repeat(padded_len.saturating_sub(text.len()))
+            );
+            for chunk in padded_text.as_bytes().chunks(2) {
+                let high = chunk[0];
+                let low = chunk.get(1).copied().unwrap_or(0x20);
+                let word = (u16::from(high) << 8) | u16::from(low);
+                bytes.extend_from_slice(&word.to_be_bytes());
+            }
+            Ok(bytes)
+        }
+    }
+}
+
+const fn twchar_operand_to_byte(op: &crate::parser::TwCharOperand) -> u8 {
+    match op {
+        crate::parser::TwCharOperand::Char(c) => *c as u8,
+        crate::parser::TwCharOperand::Byte(b) => *b,
+        crate::parser::TwCharOperand::ControlToken(t) => t.value(),
     }
 }
 
@@ -1217,5 +1248,97 @@ mod tests {
             let ext = u16::from_be_bytes([bytes[2], bytes[3]]);
             assert_eq!(ext, *expected_ext, "{name}: extension word mismatch");
         }
+    }
+
+    #[test]
+    fn encode_twchar_string() {
+        let parsed = parse_line(".twchar \"AB\"", 1).unwrap();
+        let symbols = SymbolTable::new();
+        let bytes = encode_line(&parsed, &symbols, 0, 1).unwrap();
+        assert_eq!(bytes, &[0x41, 0x42]);
+    }
+
+    #[test]
+    fn encode_twchar_hex_bytes() {
+        let parsed = parse_line(".twchar 0x01, 0x41", 1).unwrap();
+        let symbols = SymbolTable::new();
+        let bytes = encode_line(&parsed, &symbols, 0, 1).unwrap();
+        assert_eq!(bytes, &[0x01, 0x41]);
+    }
+
+    #[test]
+    fn encode_twchar_control_token() {
+        let parsed = parse_line(".twchar $FG1, 'A'", 1).unwrap();
+        let symbols = SymbolTable::new();
+        let bytes = encode_line(&parsed, &symbols, 0, 1).unwrap();
+        assert_eq!(bytes, &[0x01, 0x41]);
+    }
+
+    #[test]
+    fn encode_twchar_both_control_tokens() {
+        let parsed = parse_line(".twchar $FG1, $BG0", 1).unwrap();
+        let symbols = SymbolTable::new();
+        let bytes = encode_line(&parsed, &symbols, 0, 1).unwrap();
+        assert_eq!(bytes, &[0x01, 0x10]);
+    }
+
+    #[test]
+    fn encode_twchar_mosaic_flash() {
+        let parsed = parse_line(".twchar $MOSAIC_ON, $FLASH_OFF", 1).unwrap();
+        let symbols = SymbolTable::new();
+        let bytes = encode_line(&parsed, &symbols, 0, 1).unwrap();
+        assert_eq!(bytes, &[0x18, 0x1B]);
+    }
+
+    #[test]
+    fn encode_tstring_simple() {
+        let parsed = parse_line(".tstring \"AB\"", 1).unwrap();
+        let symbols = SymbolTable::new();
+        let bytes = encode_line(&parsed, &symbols, 0, 1).unwrap();
+        assert_eq!(bytes, &[0x41, 0x42]);
+    }
+
+    #[test]
+    fn encode_tstring_odd_length() {
+        let parsed = parse_line(".tstring \"ABC\"", 1).unwrap();
+        let symbols = SymbolTable::new();
+        let bytes = encode_line(&parsed, &symbols, 0, 1).unwrap();
+        assert_eq!(bytes.len(), 4);
+        let word1 = u16::from_be_bytes([bytes[0], bytes[1]]);
+        let word2 = u16::from_be_bytes([bytes[2], bytes[3]]);
+        assert_eq!(word1, 0x4142);
+        assert_eq!(word2, 0x4320);
+    }
+
+    #[test]
+    fn encode_tstring_with_padding() {
+        let parsed = parse_line(".tstring \"HI\", 10", 1).unwrap();
+        let symbols = SymbolTable::new();
+        let bytes = encode_line(&parsed, &symbols, 0, 1).unwrap();
+        assert_eq!(bytes.len(), 10);
+        assert_eq!(&bytes[0..2], &[0x48, 0x49]);
+        assert!(bytes[2..].iter().all(|&b| b == 0x20));
+    }
+
+    #[test]
+    fn encode_tstring_empty() {
+        let parsed = parse_line(".tstring \"\"", 1).unwrap();
+        let symbols = SymbolTable::new();
+        let bytes = encode_line(&parsed, &symbols, 0, 1).unwrap();
+        assert!(bytes.is_empty());
+    }
+
+    #[test]
+    fn encode_tstring_longer_than_min() {
+        let parsed = parse_line(".tstring \"HELLO\", 3", 1).unwrap();
+        let symbols = SymbolTable::new();
+        let bytes = encode_line(&parsed, &symbols, 0, 1).unwrap();
+        assert_eq!(bytes.len(), 6);
+        let word1 = u16::from_be_bytes([bytes[0], bytes[1]]);
+        let word2 = u16::from_be_bytes([bytes[2], bytes[3]]);
+        let word3 = u16::from_be_bytes([bytes[4], bytes[5]]);
+        assert_eq!(word1, 0x4845);
+        assert_eq!(word2, 0x4C4C);
+        assert_eq!(word3, 0x4F20);
     }
 }
