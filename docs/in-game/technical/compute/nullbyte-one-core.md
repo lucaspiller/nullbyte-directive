@@ -1,5 +1,6 @@
-NULLBYTE ONE CORE SPECIFICATION Exodus Protocol Compliance Document -- Revision
-1.3
+NULLBYTE ONE CORE SPECIFICATION
+Exodus Protocol Compliance Document
+Revision 1.3
 
 ================================================================================
 PREAMBLE
@@ -36,8 +37,8 @@ AT-A-GLANCE
 - Vectors for TRAP, EVENT, and FAULT dispatch
 
 ================================================================================
-
-1. # CORE STATE
+1) CORE STATE
+================================================================================
 
 The Nullbyte One has fifteen registers. Eight are general-purpose; the rest
 serve specific roles in control flow, timing, and fault handling.
@@ -65,8 +66,8 @@ at boundaries) F 5 Fault-latched (set on fault entry; cleared on reset)
 
 Bits 6..15 read as 0. Writes to them are ignored.
 
-================================================================================ 2)
-MEMORY MAP
+================================================================================
+2) MEMORY MAP
 ================================================================================
 
 The entire 64 KiB address space is partitioned into fixed regions. This map
@@ -102,8 +103,8 @@ Self-modifying code is ISA-legal (you can execute from RAM), but deployment
 certification may restrict it. If all three cores don't produce the same result,
 the voter will catch and raise an execution fault.
 
-================================================================================ 3)
-CAPABILITIES (CAP)
+================================================================================
+3) CAPABILITIES (CAP)
 ================================================================================
 
 The CAP register declares what optional hardware is present. On an
@@ -120,8 +121,8 @@ Diagnostics trace window present 4..15 Reserved Read as 0 in this revision
 
 Authority compliance requires CAP[0..3] = 1.
 
-================================================================================ 4)
-ENCODING
+================================================================================
+4) ENCODING
 ================================================================================
 
 Every instruction fits in one to three 16-bit words. The first word encodes the
@@ -160,8 +161,8 @@ in unused bits.
 Example: LOAD R1, [R3 + 5] encodes as: Word 0: OP=0x2, RD=001, RA=011, SUB=xxx,
 AM=010 Word 1: 0x0005 (disp8 = +5, upper byte = 0x00)
 
-================================================================================ 5)
-OPCODES
+================================================================================
+5) OPCODES
 ================================================================================
 
 The instruction set is small on purpose. A human team should be able to read the
@@ -248,8 +249,8 @@ id into R[RD] (0 if empty) ERET 0xA 002 4 Return from handler (see sec. 8)
 OP 0xB..0xF are reserved. Any unassigned OP or SUB value is an illegal encoding
 and triggers a fault.
 
-================================================================================ 6)
-OPERAND BINDING
+================================================================================
+6) OPERAND BINDING
 ================================================================================
 
 This section defines exactly how each instruction finds its inputs and where it
@@ -284,8 +285,8 @@ MMIO16[ext16] OUT AM=011 MMIO16[ext16] := R[RD] BSET/BCLR/BTEST AM=011 bit_index
 dequeued event id (or 0) TRAP AM=000 trap id = R[RD] & 0xFF SWI AM=100 trap id =
 ext16[7:0] (high byte = 0) NOP/SYNC/HALT AM=000 No register operands
 
-================================================================================ 7)
-EXECUTION RULES
+================================================================================
+7) EXECUTION RULES
 ================================================================================
 
 Every instruction follows the same commit order. This rigid sequencing is what
@@ -368,8 +369,8 @@ EWAIT ; stall until an event arrives EGET R0 ; grab the event id CMP R0, #0x03 ;
 is it event 3? BEQ #handle_dock ; yes -- handle docking signal JMP #event_loop ;
 no -- wait for the next one
 
-================================================================================ 8)
-DISPATCH MODEL (TRAP / EVENT / FAULT)
+================================================================================
+8) DISPATCH MODEL (TRAP / EVENT / FAULT)
 ================================================================================
 
 When something exceptional happens such as a software trap, an external event,
@@ -432,8 +433,8 @@ Dispatch costs:
 TRAP/EVENT entry: 5 cycles (after the issuing instruction) FAULT entry: 5 cycles
 (+ faulting instruction's base cost) ERET return: 4 cycles
 
-================================================================================ 9)
-EVENT QUEUE
+================================================================================
+9) EVENT QUEUE
 ================================================================================
 
 The event queue is how the outside world gets the core's attention: a docking
@@ -459,8 +460,8 @@ If an enqueue occurs while the queue is full, the core faults. Four slots is
 enough if you handle events promptly. If it isn't enough, simplify your event
 sources.
 
-================================================================================ 10)
-TIMING
+================================================================================
+10) TIMING
 ================================================================================
 
 Every instruction has a fixed cycle cost that depends only on its form, never on
@@ -522,8 +523,8 @@ handler would itself cost cycles the core no longer has). Instead:
 This gives software one chance to recover. If it cannot recover within a single
 tick, the core stops. A halted core is a safe core.
 
-================================================================================ 11)
-RESET AND BOOT
+================================================================================
+11) RESET AND BOOT
 ================================================================================
 
 On reset, the core initializes to a known state and begins executing at address
@@ -550,8 +551,8 @@ SP starts at 0xE000 because that is the boundary between RAM and MMIO. The stack
 grows downward into RAM. SP must remain even- aligned at all function and
 handler boundaries.
 
-================================================================================ 12)
-FAULT CONTRACT
+================================================================================
+12) FAULT CONTRACT
 ================================================================================
 
 The core makes a simple promise: if something is wrong, it will tell you. It
@@ -580,8 +581,8 @@ has.
 Detailed fault taxonomy and priority ordering are defined per deployment
 profile.
 
-================================================================================ 13)
-MMIO CONTRACT
+================================================================================
+13) MMIO CONTRACT
 ================================================================================
 
 MMIO is how the core talks to the ship's hardware. Reading sensor latches,
@@ -609,8 +610,8 @@ hardware-enforced boundary between "the core wants to" and "the ship allows it."
 Devices must not mutate CPU registers directly. All communication goes through
 the MMIO window.
 
-================================================================================ 14)
-DIAGNOSTICS WINDOW
+================================================================================
+14) DIAGNOSTICS WINDOW
 ================================================================================
 
 The diagnostics window at 0xF000..0xF0FF is a read-only view into the core's
@@ -629,8 +630,8 @@ Exposed data:
 Writing to the diagnostics window triggers a fault. It is read- only for the
 same reason a flight recorder should not have an erase button.
 
-================================================================================ 15)
-CALLING CONVENTION
+================================================================================
+15) CALLING CONVENTION
 ================================================================================
 
 The following conventions allow independently-written code modules to call each
@@ -670,8 +671,8 @@ base + offset RET ; return to caller
 ; calling it: MOV R0, #0x4000 ; base address MOV R1, #0x0010 ; offset CALL
 #add_offset ; R0 now holds 0x4010
 
-================================================================================ 16)
-DETERMINISM AND COMPLIANCE
+================================================================================
+16) DETERMINISM AND COMPLIANCE
 ================================================================================
 
 The Nullbyte One exists because the Quiet Burn proved that opaque,

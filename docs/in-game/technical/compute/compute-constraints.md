@@ -1,4 +1,5 @@
-AUTHORITY-PATH COMPUTE CONSTRAINTS Exodus Protocol Compliance Document --
+AUTHORITY-PATH COMPUTE CONSTRAINTS
+Exodus Protocol Compliance Document
 Revision 1.0
 
 ================================================================================
@@ -29,8 +30,8 @@ AT-A-GLANCE
 - Watchdog-enforced cycle budgets with deterministic fallback
 
 ================================================================================
-
-1. # MEMORY MODEL
+1) MEMORY MODEL
+================================================================================
 
 Authority-path controllers use a fixed memory map with a bounded address space.
 The map is set at build time and cannot change during operation. Runtime
@@ -77,8 +78,8 @@ Memory safety:
 - Integrity checks are required at trust boundaries: length, mode, version, and
   field legality.
 
-================================================================================ 2)
-FIXED-POINT ARITHMETIC
+================================================================================
+2) FIXED-POINT ARITHMETIC
 ================================================================================
 
 Floating-point is excluded from authority-path logic. This is is a safety
@@ -119,8 +120,8 @@ compute (non-authority systems). But authority layers accept only bounded
 artifacts -- targets, plans, constraints -- and re-validate them before
 execution. The authority path never trusts advisory output blindly.
 
-================================================================================ 3)
-FAILURE MODES AND REQUIRED RESPONSES
+================================================================================
+3) FAILURE MODES AND REQUIRED RESPONSES
 ================================================================================
 
 Authority-path code must handle every failure class explicitly. "It probably
@@ -177,8 +178,8 @@ Response: - Enter fail-safe execution profile - Revoke non-essential authority
 outputs - Require maintenance-safe restart and re-certification before returning
 to full mode
 
-================================================================================ 4)
-COMPLIANCE CHECKLIST
+================================================================================
+4) COMPLIANCE CHECKLIST
 ================================================================================
 
 An authority-path implementation is compliant only if all of the following are
