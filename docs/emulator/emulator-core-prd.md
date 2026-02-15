@@ -13,8 +13,8 @@ authority CPU simulation used by Nullbyte Directive services.
 
 This PRD is derived from existing project canon and technical constraints:
 
-- `docs/in-game/technical/compute/nullbyte-one-core.md`
-- `docs/in-game/technical/compute/compute-constraints.md`
+- `docs/in-game/technical/compute/nullbyte-one-core.txt`
+- `docs/in-game/technical/compute/compute-constraints.txt`
 - `docs/design/technical/nullbyte-one.md`
 - `docs/in-game/canon/doctrine.md`
 - `docs/in-game/canon/gameplay-pillars.md`
@@ -515,9 +515,9 @@ Target selection:
 ## Appendix: Requirement Traceability
 
 - ISA, memory, timing, dispatch:
-  `docs/in-game/technical/compute/nullbyte-one-core.md`
+  `docs/in-game/technical/compute/nullbyte-one-core.txt`
 - Authority compute constraints:
-  `docs/in-game/technical/compute/compute-constraints.md`
+  `docs/in-game/technical/compute/compute-constraints.txt`
 - Simulation and budget profile intent: `docs/design/technical/nullbyte-one.md`
 - Layer boundaries and trust model: `docs/in-game/canon/doctrine.md`
 - Gameplay pressure alignment for compute scarcity:

@@ -62,7 +62,7 @@ Before finalizing a canon edit, run a term and continuity sweep.
 - Confirm core doctrine terms are capitalized canonically.
 - Confirm new claims do not contradict `docs/in-game/canon/timeline.md`.
 - Confirm technical claims do not violate
-  `docs/in-game/technical/compute/compute-constraints.md`.
+  `docs/in-game/technical/compute/compute-constraints.txt`.
 - Confirm world and gameplay implications stay aligned with
   `docs/in-game/canon/gameplay-pillars.md`.
 

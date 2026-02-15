@@ -14,7 +14,7 @@ pub const TELE7_END: u16 = 0xE12F;
 pub const TELE7_ID: u16 = 0x0745;
 
 /// TELE-7 device version.
-pub const TELE7_VERSION: u16 = 0x0001;
+pub const TELE7_VERSION: u16 = 0x0003;
 
 const PAGE_SIZE_WORDS: usize = 500;
 #[allow(clippy::cast_possible_truncation)]

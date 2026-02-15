@@ -2,7 +2,7 @@
 
 This document records the high-level design decisions for `Nullbyte One`, the
 standard authority CPU used by Nullbyte-compliant systems. The in-game technical
-spec lives at `docs/in-game/technical/compute/nullbyte-one-core.md`.
+spec lives at `docs/in-game/technical/compute/nullbyte-one-core.txt`.
 
 ## Product Intent
 

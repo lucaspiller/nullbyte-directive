@@ -45,24 +45,27 @@ serve specific roles in control flow, timing, and fault handling.
 
 Architectural registers:
 
-Name Width Meaning
-
----
-
-R0..R7 16 General purpose PC 16 Program counter SP 16 Stack pointer FLAGS 16
-Status and control flags TICK 16 Cycle counter in current tick CAP 16 Capability
-declaration (read-only) CAUSE 16 Trap/event/fault cause (latched at dispatch
-entry) EVP 16 Event-pending bitmap (read-only)
+Name      | Width | Meaning
+----------|-------|---------------------------------------------
+R0..R7    | 16    | General purpose
+PC        | 16    | Program counter
+SP        | 16    | Stack pointer
+FLAGS     | 16    | Status and control flags
+TICK      | 16    | Cycle counter in current tick
+CAP       | 16    | Capability declaration (read-only)
+CAUSE     | 16    | Trap/event/fault cause (latched at dispatch entry)
+EVP       | 16    | Event-pending bitmap (read-only)
 
 FLAGS layout:
 
-Flag Bit Meaning
-
----
-
-Z 0 Set if result == 0 N 1 Set if result bit 15 == 1 (sign bit) C 2 Carry/borrow
-(operation-specific) V 3 Signed overflow I 4 Event enable (1 = events can fire
-at boundaries) F 5 Fault-latched (set on fault entry; cleared on reset)
+Flag | Bit | Meaning
+-----|-----|----------------------------------------------------------
+Z    | 0   | Set if result == 0
+N    | 1   | Set if result bit 15 == 1 (sign bit)
+C    | 2   | Carry/borrow (operation-specific)
+V    | 3   | Signed overflow
+I    | 4   | Event enable (1 = events can fire at boundaries)
+F    | 5   | Fault-latched (set on fault entry; cleared on reset)
 
 Bits 6..15 read as 0. Writes to them are ignored.
 
@@ -75,22 +78,23 @@ cannot be remapped at runtime. What you see at boot is what you get, forever.
 Remapping would allow a compromised core to hide memory contents from
 inspection.
 
-Region Range Notes
-
----
-
-ROM 0x0000..0x3FFF Code and constant tables RAM 0x4000..0xDFFF Writable storage
-MMIO 0xE000..0xEFFF Device registers DIAG 0xF000..0xF0FF Diagnostics (read-only)
-Reserved 0xF100..0xFFFF Must not be accessed
+Region   | Range           | Notes
+---------|-----------------|--------------------------------
+ROM      | 0x0000..0x3FFF  | Code and constant tables
+RAM      | 0x4000..0xDFFF  | Writable storage
+MMIO     | 0xE000..0xEFFF  | Device registers
+DIAG     | 0xF000..0xF0FF  | Diagnostics (read-only)
+Reserved | 0xF100..0xFFFF  | Must not be accessed
 
 Execute policy:
 
-Region Fetch Write
-
----
-
-ROM legal fault RAM legal legal MMIO fault legal\* DIAG fault fault Reserved
-fault fault
+Region   | Fetch | Write
+---------|-------|-------
+ROM      | legal | fault
+RAM      | legal | legal
+MMIO     | fault | legal*
+DIAG     | fault | fault
+Reserved | fault | fault
 
 \*MMIO writes are subject to external voter authorization.
 
@@ -111,13 +115,13 @@ The CAP register declares what optional hardware is present. On an
 authority-compliant core, all four base capabilities must be active. On
 non-authority profiles, these bits are discoverable options.
 
-Bit Name Meaning
-
----
-
-0 CAP_EVTQ Bounded event queue present 1 CAP_ATOM Atomic MMIO bit ops
-(BSET/BCLR/BTEST) 2 CAP_FXH Fixed-point helpers (MULH/QADD/QSUB/SCV) 3 CAP_TRC
-Diagnostics trace window present 4..15 Reserved Read as 0 in this revision
+Bit   | Name     | Meaning
+------|----------|--------------------------------------------
+0     | CAP_EVTQ | Bounded event queue present
+1     | CAP_ATOM | Atomic MMIO bit ops (BSET/BCLR/BTEST)
+2     | CAP_FXH  | Fixed-point helpers (MULH/QADD/QSUB/SCV)
+3     | CAP_TRC  | Diagnostics trace window present
+4..15 | Reserved | Read as 0 in this revision
 
 Authority compliance requires CAP[0..3] = 1.
 
@@ -131,27 +135,28 @@ displacement values.
 
 Primary word bitfields:
 
-Bits Field Meaning
-
----
-
-15..12 OP Primary opcode (16 classes) 11..9 RD Destination register or condition
-field 8..6 RA Source register A or mode field 5..3 SUB Source register B or
-sub-opcode 2..0 AM Addressing mode
+Bits   | Field | Meaning
+-------|-------|--------------------------------------------
+15..12 | OP    | Primary opcode (16 classes)
+11..9  | RD    | Destination register or condition field
+8..6   | RA    | Source register A or mode field
+5..3   | SUB   | Source register B or sub-opcode
+2..0   | AM    | Addressing mode
 
 In binary: OOOO DDD AAA SSS MMM
 
 Addressing modes:
 
-AM Name Extra? Effective address
-
----
-
-000 Register direct no Value is in R[RA] 001 Register indirect no EA = R[RA] 010
-Reg + disp8 yes EA = R[RA] + sign_extend(disp8) 011 Absolute yes EA = ext16 100
-Immediate yes Value is ext16 101 PC-relative yes EA = PC_next +
-sign_extend(ext16) 110 (reserved) -- Illegal encoding fault 111 (reserved) --
-Illegal encoding fault
+AM  | Name              | Extra? | Effective address / value
+----|-------------------|--------|-------------------------------------------
+000 | Register direct   | no     | Value is in R[RA]
+001 | Register indirect | no     | EA = R[RA]
+010 | Reg + disp8       | yes    | EA = R[RA] + sign_extend(disp8)
+011 | Absolute          | yes    | EA = ext16
+100 | Immediate         | yes    | Value is ext16
+101 | PC-relative       | yes    | EA = PC_next + sign_extend(ext16)
+110 | (reserved)        | --     | Illegal encoding fault
+111 | (reserved)        | --     | Illegal encoding fault
 
 AM=010 has a special rule: the extension word carries an 8-bit signed
 displacement in its low byte. The upper byte must be the sign extension (0x00 or
@@ -169,36 +174,48 @@ The instruction set is small on purpose. A human team should be able to read the
 entire opcode map in one sitting and hold it in memory. The full opcode is 7
 bits: 4-bit OP (primary class) and 3-bit SUB (instruction within that class).
 
-Inst OP SUB Cost Description
+Class: Control (OP=0x0)
 
----
+Inst | OP  | SUB | Cost | Description
+-----|-----|-----|------|-----------------------------------------------
+NOP  | 0x0 | 000 | 1    | Do nothing, advance PC
+SYNC | 0x0 | 001 | 1    | Barrier: all prior writes visible
+HALT | 0x0 | 002 | 1    | Halt for remainder of tick
+TRAP | 0x0 | 003 | 1    | Software trap using R[RD] as trap id
+SWI  | 0x0 | 004 | 1    | Software trap using immediate trap id
 
-Control (OP=0x0):
+Class: Data movement (OP=0x1..0x3)
 
-NOP 0x0 000 1 Do nothing, advance PC SYNC 0x0 001 1 Barrier: all prior writes
-visible HALT 0x0 002 1 Halt for remainder of tick TRAP 0x0 003 1 Software trap
-using R[RD] as trap id SWI 0x0 004 1 Software trap using immediate trap id
+Inst  | OP  | SUB | Cost | Description
+------|-----|-----|------|-----------------------------------------------
+MOV   | 0x1 | --  | 1    | Copy register or immediate to R[RD]
+LOAD  | 0x2 | --  | 2    | Read 16-bit word from memory into R[RD]
+STORE | 0x3 | --  | 2    | Write R[RD] to memory
 
-Data movement (OP=0x1..0x3):
+Class: Integer ALU (OP=0x4)
 
-MOV 0x1 -- 1 Copy register or immediate to R[RD] LOAD 0x2 -- 2 Read 16-bit word
-from memory into R[RD] STORE 0x3 -- 2 Write R[RD] to memory
+Inst | OP  | SUB | Cost | Description
+-----|-----|-----|------|-----------------------------------------------
+ADD  | 0x4 | 000 | 1    | R[RD] := A + B, sets Z/N/C/V
+SUB  | 0x4 | 001 | 1    | R[RD] := A - B, sets Z/N/C/V
+AND  | 0x4 | 002 | 1    | R[RD] := A & B, sets Z/N
+OR   | 0x4 | 003 | 1    | R[RD] := A | B, sets Z/N
+XOR  | 0x4 | 004 | 1    | R[RD] := A ^ B, sets Z/N
+SHL  | 0x4 | 005 | 1    | R[RD] := A << B[3:0], sets Z/N/C
+SHR  | 0x4 | 006 | 1    | R[RD] := A >> B[3:0] (arithmetic)
+CMP  | 0x4 | 007 | 1    | Flags only: computes A - B, discards
 
-Integer ALU (OP=0x4):
+Class: Math helpers (OP=0x5)
 
-ADD 0x4 000 1 R[RD] := A + B, sets Z/N/C/V SUB 0x4 001 1 R[RD] := A - B, sets
-Z/N/C/V AND 0x4 002 1 R[RD] := A & B, sets Z/N OR 0x4 003 1 R[RD] := A | B, sets
-Z/N XOR 0x4 004 1 R[RD] := A ^ B, sets Z/N SHL 0x4 005 1 R[RD] := A << B[3:0],
-sets Z/N/C SHR 0x4 006 1 R[RD] := A >> B[3:0] (arithmetic) CMP 0x4 007 1 Flags
-only: computes A - B, discards
-
-Math helpers (OP=0x5):
-
-MUL 0x5 000 2 R[RD] := low 16 bits of A _ B MULH 0x5 001 2 R[RD] := high 16 bits
-of signed A _ B DIV 0x5 002 3 R[RD] := A / B (unsigned, truncating) MOD 0x5 003
-3 R[RD] := A % B (unsigned remainder) QADD 0x5 004 1 Saturating add: clamp(A +
-B) QSUB 0x5 005 1 Saturating sub: clamp(A - B) SCV 0x5 006 1 Saturating
-shift/convert (see sec. 7)
+Inst | OP  | SUB | Cost | Description
+-----|-----|-----|------|-----------------------------------------------
+MUL  | 0x5 | 000 | 2    | R[RD] := low 16 bits of A * B
+MULH | 0x5 | 001 | 2    | R[RD] := high 16 bits of signed A * B
+DIV  | 0x5 | 002 | 3    | R[RD] := A / B (unsigned, truncating)
+MOD  | 0x5 | 003 | 3    | R[RD] := A % B (unsigned remainder)
+QADD | 0x5 | 004 | 1    | Saturating add: clamp(A + B)
+QSUB | 0x5 | 005 | 1    | Saturating sub: clamp(A - B)
+SCV  | 0x5 | 006 | 1    | Saturating shift/convert (see sec. 7)
 
 MUL and MULH together give you the full 32-bit product of two 16-bit values in
 two instructions. MUL handles integer math (array indexing, counters, scaling by
@@ -218,33 +235,49 @@ implementations.
 
 Branch and jump (OP=0x6):
 
-BEQ 0x6 000 1/2 Branch if Z == 1 BNE 0x6 001 1/2 Branch if Z == 0 BLT 0x6 002
-1/2 Branch if N != V (signed less) BLE 0x6 003 1/2 Branch if Z==1 or N!=V BGT
-0x6 004 1/2 Branch if Z==0 and N==V BGE 0x6 005 1/2 Branch if N == V (signed
-greater/eq) JMP 0x6 006 2 Unconditional jump CALL 0x6 007 2 Push return address,
-jump (AM=101) RET 0x6 007 2 Pop return address, jump (AM=000)
+Inst | OP  | SUB | Cost | Description
+-----|-----|-----|------|-----------------------------------------------
+BEQ  | 0x6 | 000 | 1/2  | Branch if Z == 1
+BNE  | 0x6 | 001 | 1/2  | Branch if Z == 0
+BLT  | 0x6 | 002 | 1/2  | Branch if N != V (signed less)
+BLE  | 0x6 | 003 | 1/2  | Branch if Z==1 or N!=V
+BGT  | 0x6 | 004 | 1/2  | Branch if Z==0 and N==V
+BGE  | 0x6 | 005 | 1/2  | Branch if N == V (signed greater/eq)
+JMP  | 0x6 | 006 | 2    | Unconditional jump
+CALL | 0x6 | 007 | 2    | Push return address, jump (AM=101)
+RET  | 0x6 | 007 | 2    | Pop return address, jump (AM=000)
 
 Branches cost 1 cycle if not taken, 2 if taken.
 
 Stack (OP=0x7):
 
-PUSH 0x7 000 1 SP -= 2, store R[RD] at [SP] POP 0x7 001 1 Load [SP] into R[RD],
-SP += 2
+Inst | OP  | SUB | Cost | Description
+-----|-----|-----|------|-----------------------------------------------
+PUSH | 0x7 | 000 | 1    | SP -= 2, store R[RD] at [SP]
+POP  | 0x7 | 001 | 1    | Load [SP] into R[RD], SP += 2
 
 MMIO (OP=0x8):
 
-IN 0x8 000 4 Read device register into R[RD] OUT 0x8 001 4 Write R[RD] to device
-register
+Inst | OP  | SUB | Cost | Description
+-----|-----|-----|------|-----------------------------------------------
+IN   | 0x8 | 000 | 4    | Read device register into R[RD]
+OUT  | 0x8 | 001 | 4    | Write R[RD] to device register
 
 Atomic MMIO (OP=0x9):
 
-BSET 0x9 000 4 Set bit in MMIO word (read-modify-write) BCLR 0x9 001 4 Clear bit
-in MMIO word BTEST 0x9 002 4 Test bit in MMIO word, sets Z flag
+Inst  | OP  | SUB | Cost | Description
+------|-----|-----|------|-----------------------------------------------
+BSET  | 0x9 | 000 | 4    | Set bit in MMIO word (read-modify-write)
+BCLR  | 0x9 | 001 | 4    | Clear bit in MMIO word
+BTEST | 0x9 | 002 | 4    | Test bit in MMIO word, sets Z flag
 
 Event (OP=0xA):
 
-EWAIT 0xA 000 1 Stall until event queue non-empty EGET 0xA 001 1 Dequeue event
-id into R[RD] (0 if empty) ERET 0xA 002 4 Return from handler (see sec. 8)
+Inst  | OP  | SUB | Cost | Description
+------|-----|-----|------|-----------------------------------------------
+EWAIT | 0xA | 000 | 1    | Stall until event queue non-empty
+EGET  | 0xA | 001 | 1    | Dequeue event id into R[RD] (0 if empty)
+ERET  | 0xA | 002 | 4    | Return from handler (see sec. 8)
 
 OP 0xB..0xF are reserved. Any unassigned OP or SUB value is an illegal encoding
 and triggers a fault.
@@ -259,31 +292,39 @@ illegal encoding fault.
 
 Effective address formulas:
 
-AM EA calculation
-
----
-
-001 EA = R[RA] 010 EA = R[RA] + sign_extend_8(ext16[7:0]) 011 EA = ext16 101 EA
-= PC_next + sign_extend_16(ext16)
+AM  | EA calculation
+----|-----------------------------------------------
+001 | EA = R[RA]
+010 | EA = R[RA] + sign_extend_8(ext16[7:0])
+011 | EA = ext16
+101 | EA = PC_next + sign_extend_16(ext16)
 
 Binding table:
 
-Instruction Binding
-
----
-
-MOV AM=000 R[RD] := R[RA] MOV AM=100 R[RD] := ext16 LOAD AM=001/010/011/101
-R[RD] := MEM16[EA] STORE AM=001/010/011/101 MEM16[EA] := R[RD] ALU reg AM=000
-A=R[RA], B=R[SUB], result -> R[RD] ALU imm AM=100 A=R[RA], B=ext16, result ->
-R[RD] Helper reg AM=000 A=R[RA], B=R[SUB], result -> R[RD] Helper imm AM=100
-A=R[RA], B=ext16, result -> R[RD] BEQ..BGE AM=101 Tests FLAGS, branch target
-from ext16 JMP AM=101 PC := PC_next + sign_extend_16(ext16) CALL AM=101
-PUSH(PC_next), then PC := target RET AM=000 PC := POP() PUSH AM=000 SP-=2,
-MEM16[SP] := R[RD] POP AM=000 R[RD] := MEM16[SP], SP+=2 IN AM=011 R[RD] :=
-MMIO16[ext16] OUT AM=011 MMIO16[ext16] := R[RD] BSET/BCLR/BTEST AM=011 bit_index
-= R[RD] & 0x000F EWAIT/ERET AM=000 No register operands EGET AM=000 R[RD] :=
-dequeued event id (or 0) TRAP AM=000 trap id = R[RD] & 0xFF SWI AM=100 trap id =
-ext16[7:0] (high byte = 0) NOP/SYNC/HALT AM=000 No register operands
+Instruction            | Binding
+-----------------------|-------------------------------------------------------------
+MOV (AM=000)           | R[RD] := R[RA]
+MOV (AM=100)           | R[RD] := ext16
+LOAD                   | AM=001/010/011/101, R[RD] := MEM16[EA]
+STORE                  | AM=001/010/011/101, MEM16[EA] := R[RD]
+ALU reg                | AM=000, A=R[RA], B=R[SUB], result -> R[RD]
+ALU imm                | AM=100, A=R[RA], B=ext16, result -> R[RD]
+Helper reg             | AM=000, A=R[RA], B=R[SUB], result -> R[RD]
+Helper imm             | AM=100, A=R[RA], B=ext16, result -> R[RD]
+BEQ..BGE               | AM=101, tests FLAGS, branch target from ext16
+JMP                    | AM=101, PC := PC_next + sign_extend_16(ext16)
+CALL                   | AM=101, PUSH(PC_next), then PC := target
+RET                    | AM=000, PC := POP()
+PUSH                   | AM=000, SP-=2, MEM16[SP] := R[RD]
+POP                    | AM=000, R[RD] := MEM16[SP], SP+=2
+IN                     | AM=011, R[RD] := MMIO16[ext16]
+OUT                    | AM=011, MMIO16[ext16] := R[RD]
+BSET/BCLR/BTEST        | AM=011, bit_index = R[RD] & 0x000F
+EWAIT/ERET             | AM=000, no register operands
+EGET                   | AM=000, R[RD] := dequeued event id (or 0)
+TRAP                   | AM=000, trap id = R[RD] & 0xFF
+SWI                    | AM=100, trap id = ext16[7:0] (high byte = 0)
+NOP/SYNC/HALT          | AM=000, no register operands
 
 ================================================================================
 7) EXECUTION RULES
@@ -312,12 +353,14 @@ If a 16-bit data access lands on an odd address, the core faults.
 
 Branch conditions:
 
-Op Condition Taken Not-taken
-
----
-
-BEQ Z == 1 2 cy 1 cy BNE Z == 0 2 cy 1 cy BLT N != V 2 cy 1 cy BLE Z==1 or N!=V
-2 cy 1 cy BGT Z==0 and N==V 2 cy 1 cy BGE N == V 2 cy 1 cy
+Op  | Condition           | Taken | Not-taken
+----|---------------------|-------|----------
+BEQ | Z == 1              | 2 cy  | 1 cy
+BNE | Z == 0              | 2 cy  | 1 cy
+BLT | N != V              | 2 cy  | 1 cy
+BLE | Z==1 or N!=V        | 2 cy  | 1 cy
+BGT | Z==0 and N==V       | 2 cy  | 1 cy
+BGE | N == V              | 2 cy  | 1 cy
 
 Taken target: PC_next + sign_extend_16(ext16).
 
@@ -382,21 +425,19 @@ happened (via CAUSE and R0), deals with it, and returns.
 
 Vectors:
 
-Vector Address Used for
-
----
-
-VEC_TRAP 0x0008 Software traps (TRAP, SWI) VEC_EVENT 0x000A External events from
-the event queue VEC_FAULT 0x000C Faults (illegal ops, bad access, etc.)
+Vector    | Address | Used for
+----------|---------|-----------------------------------------------
+VEC_TRAP  | 0x0008  | Software traps (TRAP, SWI)
+VEC_EVENT | 0x000A  | External events from the event queue
+VEC_FAULT | 0x000C  | Faults (illegal ops, bad access, etc.)
 
 CAUSE register layout:
 
-Bits Meaning
-
----
-
-15..12 Class: 1=TRAP, 2=EVENT, 3=FAULT 11..8 Subcode namespace (authority
-profile uses 0) 7..0 Trap id, event id, or fault code
+Bits   | Meaning
+-------|----------------------------------------------------------
+15..12 | Class: 1=TRAP, 2=EVENT, 3=FAULT
+11..8  | Subcode namespace (authority profile uses 0)
+7..0   | Trap id, event id, or fault code
 
 Where the low byte comes from:
 
@@ -446,12 +487,13 @@ unpredictable processing spikes, breaking the core's timing guarantees. If your
 system generates events faster than you handle them, that is a design problem,
 not a queue-size problem.
 
-Property Value
-
----
-
-Structure Fixed-depth FIFO Depth 4 entries Payload 8-bit event id (no additional
-data) Sampling Checked at instruction boundaries only Reordering Forbidden
+Property  | Value
+----------|-----------------------------------------------
+Structure | Fixed-depth FIFO
+Depth     | 4 entries
+Payload   | 8-bit event id (no additional data)
+Sampling  | Checked at instruction boundaries only
+Reordering| Forbidden
 
 If FLAGS.I == 1 and the queue is non-empty at an instruction boundary, the core
 performs an EVENT dispatch.
@@ -472,13 +514,30 @@ and reject the output.
 
 Instruction/form Cycles
 
----
-
-NOP, SYNC, HALT 1 TRAP issue, SWI issue 1 MOV (reg or imm) 1 LOAD, STORE 2 ADD,
-SUB, AND, OR, XOR, SHL, SHR, CMP 1 MUL, MULH 2 DIV, MOD 3 QADD, QSUB, SCV 1
-BEQ..BGE (not taken) 1 BEQ..BGE (taken) 2 JMP 2 CALL 2 RET 2 PUSH, POP 1 IN, OUT
-4 BSET, BCLR, BTEST 4 EWAIT, EGET 1 TRAP dispatch entry 5 EVENT dispatch entry 5
-FAULT dispatch entry 5 (+base) ERET return 4
+Instruction/form         | Cycles
+-------------------------|----------------
+NOP, SYNC, HALT          | 1
+TRAP issue, SWI issue    | 1
+MOV (reg or imm)         | 1
+LOAD, STORE              | 2
+ADD, SUB, AND, OR, XOR,
+SHL, SHR, CMP            | 1
+MUL, MULH                | 2
+DIV, MOD                 | 3
+QADD, QSUB, SCV          | 1
+BEQ..BGE (not taken)     | 1
+BEQ..BGE (taken)         | 2
+JMP                      | 2
+CALL                     | 2
+RET                      | 2
+PUSH, POP                | 1
+IN, OUT                  | 4
+BSET, BCLR, BTEST        | 4
+EWAIT, EGET              | 1
+TRAP dispatch entry      | 5
+EVENT dispatch entry     | 5
+FAULT dispatch entry     | 5 (+base)
+ERET return              | 4
 
 Tick budget (authority profile):
 
@@ -537,13 +596,16 @@ storage into RAM, validates it, and jumps to the entry point. If the load or
 validation fails, the boot program halts the core. The storage interface is an
 MMIO device; the core does not have a dedicated boot bus.
 
-Register Reset value
-
----
-
-PC 0x0000 SP 0xE000 (top of RAM, grows downward) R0..R7 0x0000 FLAGS 0x0000
-(events disabled, no fault latched) TICK 0x0000 EVP 0x0000 CAUSE 0x0000 CAP Set
-by hardware (capability bits)
+Register | Reset value
+---------|-----------------------------------------------
+PC       | 0x0000
+SP       | 0xE000 (top of RAM, grows downward)
+R0..R7   | 0x0000
+FLAGS    | 0x0000 (events disabled, no fault latched)
+TICK     | 0x0000
+EVP      | 0x0000
+CAUSE    | 0x0000
+CAP      | Set by hardware (capability bits)
 
 Reset also clears the event queue and any latched fault state.
 
@@ -646,13 +708,13 @@ Stack model:
 
 Register usage:
 
-Role Registers
-
----
-
-Arguments R0, R1, R2, R3 Return values R0 (primary), R1 (secondary) Caller-saved
-R0..R3, R6, R7, condition flags Callee-saved R4, R5 Scratch R7 (assembler
-temporary)
+Role         | Registers
+-------------|-----------------------------------------
+Arguments    | R0, R1, R2, R3
+Return values| R0 (primary), R1 (secondary)
+Caller-saved | R0..R3, R6, R7, condition flags
+Callee-saved | R4, R5
+Scratch      | R7 (assembler temporary)
 
 Callee must preserve R4, R5, and balanced SP.
 
@@ -697,23 +759,25 @@ implementations from this specification. In production authority assemblies, all
 three run in lockstep and an ECP voter gates every write. If any core disagrees,
 the write is rejected.
 
-================================================================================ 17)
-NOTATION REFERENCE
+================================================================================
+17) NOTATION REFERENCE
 ================================================================================
 
 Shorthand used throughout this document.
 
-Notation Meaning
-
----
-
-R[x] Value of register x MEM16[a] 16-bit memory word at address a MMIO16[a]
-16-bit MMIO word at address a [a] Dereference (width from context) ext16 16-bit
-extension word (follows primary word) PC_next PC after consuming current
-instruction's words sign_extend_8 Sign-extend 8-bit value to 16 bits
-sign_extend_16 Signed interpretation of 16-bit value zero_extend_8 Zero-extend
-8-bit value to 16 bits sat_s16(v) Clamp v to signed 16-bit range bit(n,v) Bit n
-of value v
+Notation       | Meaning
+---------------|-----------------------------------------------------------
+R[x]           | Value of register x
+MEM16[a]       | 16-bit memory word at address a
+MMIO16[a]      | 16-bit MMIO word at address a
+[a]            | Dereference (width from context)
+ext16          | 16-bit extension word (follows primary word)
+PC_next        | PC after consuming current instruction's words
+sign_extend_8  | Sign-extend 8-bit value to 16 bits
+sign_extend_16 | Signed interpretation of 16-bit value
+zero_extend_8  | Zero-extend 8-bit value to 16 bits
+sat_s16(v)     | Clamp v to signed 16-bit range
+bit(n,v)       | Bit n of value v
 
 ================================================================================
 END OF SPECIFICATION
