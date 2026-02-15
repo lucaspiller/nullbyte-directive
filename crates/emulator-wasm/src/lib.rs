@@ -1,8 +1,15 @@
+use assembler::{
+    encoder::encode_line,
+    parser::{parse_line, Directive, ParsedLine},
+    source::extract_source,
+    symbols::assign_addresses_with_lines,
+};
 use emulator_core::{
     disassemble_window, run_one, step_one, CompositeMmio, CoreConfig, CoreState, RunBoundary,
     RunOutcome, RunState, StepOutcome, Tele7Config, Tele7Peripheral,
 };
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 use wasm_bindgen::prelude::*;
 
 /// JS-compatible version of `StepOutcome`.
@@ -100,6 +107,68 @@ impl WasmCore {
     pub fn load_program(&mut self, program: &[u8]) {
         let len = program.len().min(self.state.memory.len());
         self.state.memory[..len].copy_from_slice(&program[..len]);
+    }
+
+    /// Assembles assembly source text (`.n1` or `.n1.md`) and loads it.
+    ///
+    /// `file_name` is used to select plain vs literate extraction semantics.
+    ///
+    /// # Errors
+    ///
+    /// Returns a JS error value when parsing, address assignment, or encoding
+    /// fails.
+    pub fn assemble_and_load_program(
+        &mut self,
+        source: &str,
+        file_name: &str,
+    ) -> Result<(), JsValue> {
+        let path = Path::new(file_name);
+        let extracted = extract_source(path, source);
+
+        let mut parsed_lines = Vec::with_capacity(extracted.lines.len());
+        let mut source_lines = Vec::with_capacity(extracted.lines.len());
+
+        for line in extracted.lines {
+            let parsed = parse_line(&line.text, line.original_line)
+                .map_err(|err| JsValue::from_str(&err.to_string()))?;
+            parsed_lines.push(parsed);
+            source_lines.push(line.original_line);
+        }
+
+        let assignment = assign_addresses_with_lines(&parsed_lines, 0, &source_lines)
+            .map_err(|err| JsValue::from_str(&err.to_string()))?;
+
+        let mut binary = Vec::new();
+
+        for addressed in &assignment.lines {
+            if let ParsedLine::Directive {
+                directive: Directive::Org(target),
+            } = &addressed.parsed
+            {
+                let target_addr = usize::try_from(*target)
+                    .map_err(|_| JsValue::from_str(".org address out of range"))?;
+                if target_addr > self.state.memory.len() {
+                    return Err(JsValue::from_str(".org address exceeds memory size"));
+                }
+                if target_addr > binary.len() {
+                    let gap = target_addr - binary.len();
+                    binary.extend(std::iter::repeat_n(0u8, gap));
+                }
+                continue;
+            }
+
+            let bytes = encode_line(
+                &addressed.parsed,
+                &assignment.symbols,
+                addressed.address,
+                addressed.source_line,
+            )
+            .map_err(|err| JsValue::from_str(&err.to_string()))?;
+            binary.extend(bytes);
+        }
+
+        self.load_program(&binary);
+        Ok(())
     }
 
     /// Resets the core to its initial state.

@@ -21,6 +21,9 @@ serde-wasm-bindgen = "0.6"
 path = "../emulator-core"
 features = ["serde"]
 
+[dependencies.assembler]
+path = "../assembler"
+
 [dev-dependencies]
 wasm-bindgen-test = "0.3"
 

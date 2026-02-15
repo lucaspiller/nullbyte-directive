@@ -115,6 +115,7 @@ dependencies = [
 name = "emulator-wasm"
 version = "0.1.0"
 dependencies = [
+ "assembler",
  "console_error_panic_hook",
  "emulator-core",
  "js-sys",

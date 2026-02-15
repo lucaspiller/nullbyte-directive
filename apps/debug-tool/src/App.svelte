@@ -15,7 +15,10 @@
   let isRunning = $state(false);
   let interval;
   let wasm = $state({ core: null });
-  let lastLoadedProgram = null;
+  type LoadedProgram =
+    | { kind: 'binary'; bytes: Uint8Array }
+    | { kind: 'source'; source: string; fileName: string };
+  let lastLoadedProgram: LoadedProgram | null = null;
   let tele7State = $state(null);
 
   const TICK_INTERVAL_MS = 10;
@@ -121,7 +124,11 @@
     pause();
     wasm.core.reset();
     if (lastLoadedProgram) {
-      wasm.core.load_program(lastLoadedProgram);
+      if (lastLoadedProgram.kind === 'binary') {
+        wasm.core.load_program(lastLoadedProgram.bytes);
+      } else {
+        wasm.core.assemble_and_load_program(lastLoadedProgram.source, lastLoadedProgram.fileName);
+      }
     }
     updateState();
     logs = [...logs, { ts: Date.now(), msg: "Core reset." }];
@@ -135,20 +142,34 @@
   }
 
   let fileInput;
-  function handleFileSelect(e) {
+  async function handleFileSelect(e) {
     const file = e.target.files[0];
     if (!file) return;
 
-    const reader = new FileReader();
-    reader.onload = (evt) => {
-      const arrayBuffer = evt.target.result;
-      const bytes = new Uint8Array(arrayBuffer);
-      lastLoadedProgram = bytes;
+    if (!wasm.core) return;
+    try {
+      pause();
+      wasm.core.reset();
+
+      const fileName = file.name.toLowerCase();
+      if (fileName.endsWith('.n1') || fileName.endsWith('.n1.md')) {
+        const source = await file.text();
+        wasm.core.assemble_and_load_program(source, file.name);
+        lastLoadedProgram = { kind: 'source', source, fileName: file.name };
+        updateState();
+        logs = [...logs, { ts: Date.now(), msg: `Assembled and loaded source from ${file.name}` }];
+        return;
+      }
+
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      lastLoadedProgram = { kind: 'binary', bytes };
       wasm.core.load_program(bytes);
       updateState();
       logs = [...logs, { ts: Date.now(), msg: `Loaded ${bytes.length} bytes from ${file.name}` }];
-    };
-    reader.readAsArrayBuffer(file);
+    } catch (err) {
+      console.error('Program load failed', err);
+      logs = [...logs, { ts: Date.now(), msg: `Load Error: ${err.message ?? err}` }];
+    }
   }
 
   function formatRunState(runState) {
