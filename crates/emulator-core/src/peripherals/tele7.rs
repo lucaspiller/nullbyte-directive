@@ -347,7 +347,7 @@ mod tests {
         assert_eq!(TELE7_BASE, 0xE120);
         assert_eq!(TELE7_END, 0xE12F);
         assert_eq!(TELE7_ID, 0x0745);
-        assert_eq!(TELE7_VERSION, 0x0001);
+        assert_eq!(TELE7_VERSION, 0x0003);
     }
 
     #[test]
