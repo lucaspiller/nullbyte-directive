@@ -112,6 +112,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "emulator-debug-session"
+version = "0.1.0"
+dependencies = [
+ "assembler",
+ "emulator-core",
+ "tempfile",
+]
+
+[[package]]
 name = "emulator-wasm"
 version = "0.1.0"
 dependencies = [

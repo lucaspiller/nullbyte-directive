@@ -478,8 +478,8 @@ fn convert_assemble_result(result: AssembleResult, _file_name: &str) -> Assemble
         .map(|entry| SourceMapEntry {
             address: entry.address,
             len_bytes: entry.bytes.len(),
-            file: entry.location.clone(),
-            line: 0,
+            file: entry.file,
+            line: entry.line,
             source: entry.source,
         })
         .collect();
@@ -716,6 +716,8 @@ mod tests {
 
         assert!(!converted.binary.is_empty());
         assert_eq!(converted.source_map.len(), 2);
+        assert_eq!(converted.source_map[0].line, 1);
+        assert_eq!(converted.source_map[1].line, 2);
         assert!(!converted.build_id.is_empty());
     }
 

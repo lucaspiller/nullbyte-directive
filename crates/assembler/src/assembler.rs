@@ -142,7 +142,11 @@ pub struct ListingEntry {
     pub bytes: Vec<u8>,
     /// Source line text.
     pub source: String,
-    /// Source location for error reporting.
+    /// Source file path.
+    pub file: String,
+    /// 1-indexed source line number.
+    pub line: usize,
+    /// Include-chain formatted location string.
     pub location: String,
 }
 
@@ -419,6 +423,8 @@ fn encode_pass2(
                 address: addressed.address,
                 bytes: bytes.clone(),
                 source: expanded.text.clone(),
+                file: expanded.file_path.to_string_lossy().to_string(),
+                line: expanded.original_line,
                 location: location.clone(),
             });
         }
@@ -624,6 +630,10 @@ R0 == 0x0001
         assert_eq!(result.listing[1].address, 2);
         assert_eq!(result.listing[1].bytes.len(), 4);
         assert_eq!(result.listing[2].address, 6);
+        assert!(result.listing[0].file.ends_with("list.n1"));
+        assert_eq!(result.listing[0].line, 1);
+        assert_eq!(result.listing[1].line, 2);
+        assert_eq!(result.listing[2].line, 3);
     }
 
     #[test]
