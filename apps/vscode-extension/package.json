@@ -1,0 +1,66 @@
+{
+  "name": "nullbyte-directive-vscode-extension",
+  "displayName": "Nullbyte Directive Debug",
+  "description": "VS Code debugging support for Nullbyte Directive sessions",
+  "version": "0.1.0",
+  "publisher": "nullbyte-directive",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Debuggers"
+  ],
+  "activationEvents": [
+    "onDebugResolve:nullbyte-directive",
+    "onCommand:nullbyteDirective.startDebugging"
+  ],
+  "main": "./src/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "nullbyteDirective.startDebugging",
+        "title": "Nullbyte Directive: Start Debug Session"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "nullbyte-directive",
+        "label": "Nullbyte Directive",
+        "languages": [
+          "plaintext",
+          "markdown"
+        ],
+        "configurationAttributes": {
+          "launch": {
+            "required": [
+              "program"
+            ],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "Path to the root .n1/.n1.md source file"
+              },
+              "cwd": {
+                "type": "string",
+                "description": "Working directory for source resolution"
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "nullbyte-directive",
+            "request": "launch",
+            "name": "Launch Nullbyte Directive",
+            "program": "${file}",
+            "cwd": "${workspaceFolder}"
+          }
+        ]
+      }
+    ]
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}
