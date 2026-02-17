@@ -9,8 +9,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use assembler::assembler::{assemble, AssembleError, AssembleResult, ListingEntry};
 use emulator_core::{
-    run_one, step_one, CompositeMmio, CoreConfig, CoreState, RunBoundary, RunOutcome, RunState,
-    StepOutcome, Tele7Config, Tele7Peripheral, ROM_END,
+    disassemble_window, run_one, step_one, CompositeMmio, CoreConfig, CoreState, DisassemblyRow,
+    RunBoundary, RunOutcome, RunState, StepOutcome, Tele7Config, Tele7Peripheral, ROM_END,
 };
 
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
@@ -114,6 +114,34 @@ pub struct MemoryWindow {
     pub start: u16,
     /// Window bytes.
     pub bytes: Vec<u8>,
+}
+
+/// TELE-7 visualizer data produced from host-owned peripheral state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Tele7VisualizerSnapshot {
+    /// Whether the TELE-7 output is enabled.
+    pub enabled: bool,
+    /// Current blink phase.
+    pub blink_phase: bool,
+    /// Current border color.
+    pub border_color: u8,
+    /// Current rendered 40x25 display buffer as packed character words.
+    pub buffer: Vec<[u8; 2]>,
+}
+
+/// Visualization-focused host snapshot for debug-tool attach mode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VisualizerSnapshot {
+    /// Current session identifiers.
+    pub ids: SessionIds,
+    /// Current emulator core state.
+    pub state: CoreState,
+    /// Full memory snapshot for memory-map visualization.
+    pub memory: Vec<u8>,
+    /// Disassembly rows around the active PC.
+    pub disassembly: Vec<DisassemblyRow>,
+    /// TELE-7 visualizer snapshot when peripheral is present.
+    pub tele7: Option<Tele7VisualizerSnapshot>,
 }
 
 /// Source map row persisted by the host.
@@ -598,6 +626,40 @@ impl DebugSessionHost {
         })
     }
 
+    /// Returns a visualization-focused snapshot for attach clients.
+    ///
+    /// Disassembly rows are centered around the current PC and include the
+    /// requested `before` and `after` instruction counts.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when session is terminated or not launched.
+    pub fn read_visualizer_snapshot(
+        &self,
+        before: usize,
+        after: usize,
+    ) -> Result<VisualizerSnapshot, HostError> {
+        self.ensure_not_terminated()?;
+        self.ensure_launched()?;
+
+        let pc = self.state.arch.pc();
+        let disassembly = disassemble_window(pc, before, after, &self.state.memory);
+        let tele7 = self.mmio.tele7().map(|tele7| Tele7VisualizerSnapshot {
+            enabled: tele7.state().is_enabled(),
+            blink_phase: tele7.state().blink_phase(),
+            border_color: tele7.state().border_color(),
+            buffer: tele7.get_display_buffer(&self.state.memory),
+        });
+
+        Ok(VisualizerSnapshot {
+            ids: self.ids(),
+            state: self.state.clone(),
+            memory: self.state.memory.to_vec(),
+            disassembly,
+            tele7,
+        })
+    }
+
     /// Replaces all breakpoints for a file using source-first anchors.
     ///
     /// # Errors
@@ -851,5 +913,68 @@ mod tests {
             .read_memory_window(0xFFFE, 4)
             .expect_err("window should fail");
         assert!(matches!(err, HostError::MemoryWindowOutOfBounds));
+    }
+
+    #[test]
+    fn conformance_visualizer_snapshot_tracks_active_state() {
+        let tmp = tempfile::tempdir().expect("tempdir must be created");
+        let src = tmp.path().join("prog.n1");
+        write_file(&src, "NOP\nHALT\n");
+
+        let mut host = DebugSessionHost::new(CoreConfig::default());
+        host.launch(&src).expect("launch should succeed");
+
+        let snapshot = host
+            .read_visualizer_snapshot(3, 3)
+            .expect("visualizer snapshot should succeed");
+
+        assert_eq!(snapshot.state.arch.pc(), 0);
+        assert_eq!(snapshot.memory.len(), 65_536);
+        assert!(!snapshot.disassembly.is_empty());
+        assert!(snapshot.tele7.is_some());
+    }
+
+    #[test]
+    fn hardening_visualizer_snapshot_is_deterministic_after_patch_cycles() {
+        let tmp = tempfile::tempdir().expect("tempdir must be created");
+        let v1 = tmp.path().join("prog_v1.n1");
+        let v2 = tmp.path().join("prog_v2.n1");
+
+        write_file(&v1, "MOV R0, #1\nHALT\n");
+        write_file(&v2, "MOV R0, #2\nHALT\n");
+
+        let mut host_a = DebugSessionHost::new(CoreConfig::default());
+        let mut host_b = DebugSessionHost::new(CoreConfig::default());
+        host_a.launch(&v1).expect("launch should succeed");
+        host_b.launch(&v1).expect("launch should succeed");
+
+        for idx in 0..6 {
+            let target = if idx % 2 == 0 { &v2 } else { &v1 };
+            host_a
+                .reload(target, ReloadMode::HotPatch)
+                .expect("reload should succeed");
+            host_b
+                .reload(target, ReloadMode::HotPatch)
+                .expect("reload should succeed");
+
+            let _ = host_a
+                .instruction_step()
+                .expect("instruction step should succeed");
+            let _ = host_b
+                .instruction_step()
+                .expect("instruction step should succeed");
+        }
+
+        let snapshot_a = host_a
+            .read_visualizer_snapshot(4, 4)
+            .expect("snapshot should succeed");
+        let snapshot_b = host_b
+            .read_visualizer_snapshot(4, 4)
+            .expect("snapshot should succeed");
+
+        assert_eq!(snapshot_a.state, snapshot_b.state);
+        assert_eq!(snapshot_a.memory, snapshot_b.memory);
+        assert_eq!(snapshot_a.disassembly, snapshot_b.disassembly);
+        assert_eq!(snapshot_a.tele7, snapshot_b.tele7);
     }
 }

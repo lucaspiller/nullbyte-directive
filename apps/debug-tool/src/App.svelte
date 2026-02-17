@@ -6,170 +6,112 @@
   import DisassemblyView from '$lib/components/DisassemblyView.svelte';
   import LogView from '$lib/components/LogView.svelte';
   import Tele7View from '$lib/components/Tele7View.svelte';
-  import initWasm, { WasmCore } from './wasm/emulator_wasm.js';
+  import { getSharedSessionHost } from '$lib/session/sharedSessionHost.js';
 
   let state = $state({});
   let memory = $state.raw(new Uint8Array(65536));
   let previousMemory = $state.raw(new Uint8Array(65536));
   let logs = $state([]);
   let isRunning = $state(false);
-  let interval;
-  let wasm = $state({ core: null });
-  type LoadedProgram =
-    | { kind: 'binary'; bytes: Uint8Array }
-    | { kind: 'source'; source: string; fileName: string };
-  let lastLoadedProgram: LoadedProgram | null = null;
+  let host = $state(null);
   let tele7State = $state(null);
-
-  const TICK_INTERVAL_MS = 10;
-
-  const SPEEDS = [
-    { name: 'SLOW', interval: 100 },
-    { name: 'FAST', interval: 10 },
-    { name: 'TURBO', interval: 0 },
-  ];
+  let speedName = $state('FAST');
   let speedIndex = $state(1);
+  let controlOwner = $state(null);
+  let secondaryControlsEnabled = $state(false);
+  let clientId = $state('');
+  let unsubscribeHost = null;
 
-  async function loadWasm() {
+  async function attachToSession() {
     try {
-      await initWasm();
-      wasm.core = new WasmCore();
-      logs = [...logs, { ts: Date.now(), msg: `Core initialized.`}]
+      clientId = globalThis.crypto?.randomUUID?.() ?? `client-${Date.now()}`;
+      host = await getSharedSessionHost();
+      unsubscribeHost = host.subscribe((snapshot) => {
+        state = snapshot.state;
+        memory = snapshot.memory;
+        previousMemory = snapshot.previousMemory;
+        tele7State = snapshot.tele7State;
+        logs = snapshot.logs;
+        isRunning = snapshot.isRunning;
+        speedName = snapshot.speedName;
+        speedIndex = snapshot.speedIndex;
+        controlOwner = snapshot.controlOwner;
+      });
     } catch (e) {
-      console.error('Error loading WASM', e);
       logs = [...logs, { ts: Date.now(), msg: `Error: ${e.message}` }];
     }
   }
 
   onMount(() => {
-    loadWasm()
+    attachToSession();
+    return () => {
+      if (secondaryControlsEnabled && host) {
+        host.releaseControl(clientId);
+      }
+      if (unsubscribeHost) {
+        unsubscribeHost();
+      }
+    };
   });
 
-  function updateState() {
-    if (!wasm.core) return;
-    try {
-      previousMemory = new Uint8Array(memory);
-      state = wasm.core.get_state();
-      memory = wasm.core.get_memory();
-      tele7State = wasm.core.get_tele7_state();
-    } catch (e) {
-        console.error("State update failed:", e);
-    }
+  function hasControl() {
+    return secondaryControlsEnabled && controlOwner === clientId;
   }
 
   function step() {
-    if (!wasm.core) return;
+    if (!host || !hasControl()) return;
     try {
-      wasm.core.step();
-      updateState();
+      host.step(clientId);
     } catch (e) {
-      console.error(e);
       logs = [...logs, { ts: Date.now(), msg: `Step Error: ${e.message}` }];
     }
   }
 
-  function tick() {
-    if (!wasm.core) return null;
-    try {
-      return wasm.core.tick();
-    } catch (e) {
-      console.error(e);
-      logs = [...logs, { ts: Date.now(), msg: `Tick Error: ${e.message}` }];
-      return null;
-    }
-  }
-
   function run() {
-    if (isRunning) return;
-    isRunning = true;
-    const currentSpeed = SPEEDS[speedIndex];
-    if (currentSpeed.interval === 0) {
-      startTurbo();
-    } else {
-      interval = setInterval(() => {
-        if (wasm.core) {
-          step();
-        }
-      }, currentSpeed.interval);
-    }
-  }
-
-  function startTurbo() {
-    interval = setInterval(() => {
-      if (wasm.core && isRunning) {
-        const outcome = tick();
-        if (outcome?.final_step?.Fault !== undefined) {
-          pause();
-          updateState();
-          logs = [...logs, { ts: Date.now(), msg: `Fault: ${outcome.final_step.Fault}` }];
-        }
-      }
-    }, TICK_INTERVAL_MS);
-
-    requestAnimationFrame(function turboUpdateState() {
-      if (!isRunning) return;
-      updateState();
-      requestAnimationFrame(turboUpdateState);
-    });
+    if (!host || !hasControl()) return;
+    host.run(clientId);
   }
 
   function pause() {
-    if (!isRunning) return;
-    isRunning = false;
-    clearInterval(interval);
+    if (!host || !hasControl()) return;
+    host.pause(clientId);
   }
 
   function reset() {
-    if (!wasm.core) return;
-    pause();
-    wasm.core.reset();
-    if (lastLoadedProgram) {
-      if (lastLoadedProgram.kind === 'binary') {
-        wasm.core.load_program(lastLoadedProgram.bytes);
-      } else {
-        wasm.core.assemble_and_load_program(lastLoadedProgram.source, lastLoadedProgram.fileName);
-      }
-    }
-    updateState();
-    logs = [...logs, { ts: Date.now(), msg: "Core reset." }];
+    if (!host || !hasControl()) return;
+    host.reset(clientId);
   }
 
   function cycleSpeed() {
-    const wasRunning = isRunning;
-    if (wasRunning) pause();
-    speedIndex = (speedIndex + 1) % SPEEDS.length;
-    if (wasRunning) run();
+    if (!host || !hasControl()) return;
+    host.setSpeed(clientId, (speedIndex + 1) % 3);
   }
 
   let fileInput;
   async function handleFileSelect(e) {
     const file = e.target.files[0];
     if (!file) return;
-
-    if (!wasm.core) return;
+    if (!host || !hasControl()) return;
     try {
-      pause();
-      wasm.core.reset();
-
-      const fileName = file.name.toLowerCase();
-      if (fileName.endsWith('.n1') || fileName.endsWith('.n1.md')) {
-        const source = await file.text();
-        wasm.core.assemble_and_load_program(source, file.name);
-        lastLoadedProgram = { kind: 'source', source, fileName: file.name };
-        updateState();
-        logs = [...logs, { ts: Date.now(), msg: `Assembled and loaded source from ${file.name}` }];
-        return;
-      }
-
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      lastLoadedProgram = { kind: 'binary', bytes };
-      wasm.core.load_program(bytes);
-      updateState();
-      logs = [...logs, { ts: Date.now(), msg: `Loaded ${bytes.length} bytes from ${file.name}` }];
+      await host.loadProgramFromFile(clientId, file);
     } catch (err) {
-      console.error('Program load failed', err);
       logs = [...logs, { ts: Date.now(), msg: `Load Error: ${err.message ?? err}` }];
     }
+  }
+
+  function toggleSecondaryControls() {
+    if (!host) return;
+    if (!secondaryControlsEnabled) {
+      if (host.requestControl(clientId)) {
+        secondaryControlsEnabled = true;
+      } else {
+        logs = [...logs, { ts: Date.now(), msg: 'Control lock unavailable: another client owns controls.' }];
+      }
+      return;
+    }
+
+    secondaryControlsEnabled = false;
+    host.releaseControl(clientId);
   }
 
   function formatRunState(runState) {
@@ -184,9 +126,9 @@
   }
 </script>
 
-{#if !wasm.core}
+{#if !host}
   <div class="h-screen w-screen flex items-center justify-center bg-terminal-bg text-accent-primary font-mono text-xl animate-pulse">
-    > INITIALIZING CORE SYSTEM...
+    > ATTACHING TO SHARED SESSION...
   </div>
 {:else}
 <div class="h-screen w-screen bg-terminal-bg text-terminal-fg flex flex-col overflow-hidden font-mono">
@@ -196,30 +138,39 @@
       <h1 class="text-xl font-bold text-accent-primary mr-4 tracking-tight">NULLBYTE::DEBUG</h1>
       
       <div class="flex space-x-2">
+        <button
+          class="px-3 py-1 border border-accent-primary hover:bg-accent-primary hover:text-black rounded transition-colors text-xs uppercase tracking-wide"
+          onclick={toggleSecondaryControls}
+        >
+          {secondaryControlsEnabled ? 'DETACH CTRL' : 'ATTACH CTRL'}
+        </button>
         <button 
           class="px-3 py-1 bg-accent-primary text-black font-bold hover:bg-white hover:text-black rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-xs uppercase tracking-wide"
           onclick={isRunning ? pause : run}
+          disabled={!hasControl()}
         >
           {isRunning ? 'PAUSE' : 'RUN'}
         </button>
         <button 
           class="px-3 py-1 border border-terminal-fg hover:bg-white hover:text-black rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-xs uppercase tracking-wide"
           onclick={step}
-          disabled={isRunning}
+          disabled={isRunning || !hasControl()}
         >
           STEP
         </button>
         <button 
           class="px-3 py-1 border border-terminal-fg hover:bg-white hover:text-black rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-xs uppercase tracking-wide"
           onclick={reset}
+          disabled={!hasControl()}
         >
           RESET
         </button>
         <button 
-          class="px-3 py-1 border border-terminal-fg hover:bg-white hover:text-black rounded transition-colors text-xs uppercase tracking-wide {speedIndex === 2 ? 'bg-accent-warning text-black font-bold' : ''}"
+          class="px-3 py-1 border border-terminal-fg hover:bg-white hover:text-black rounded transition-colors text-xs uppercase tracking-wide disabled:opacity-50 disabled:cursor-not-allowed {speedIndex === 2 ? 'bg-accent-warning text-black font-bold' : ''}"
           onclick={cycleSpeed}
+          disabled={!hasControl()}
         >
-          {SPEEDS[speedIndex].name}
+          {speedName}
         </button>
       </div>
 
@@ -228,6 +179,7 @@
           type="file" 
           bind:this={fileInput} 
           onchange={handleFileSelect} 
+          disabled={!hasControl()}
           class="text-xs text-terminal-fg
             file:mr-4 file:py-1 file:px-2
             file:rounded-full file:border-0
@@ -250,7 +202,7 @@
     <!-- Left Column: Disassembly & Registers -->
     <div class="col-span-3 flex flex-col gap-1 h-full min-h-0">
       <div class="flex-1 overflow-hidden bg-panel-bg border border-panel-border flex flex-col">
-        <DisassemblyView pc={state?.arch?.pc || 0} memory={memory} wasmCore={wasm.core} />
+        <DisassemblyView pc={state?.arch?.pc || 0} memory={memory} wasmCore={host.core} />
       </div>
       <div class="h-1/3 overflow-hidden bg-panel-bg border border-panel-border flex flex-col">
         <RegisterView arch={state?.arch || {}} />
@@ -275,7 +227,7 @@
   
   <!-- Status Bar -->
   <footer class="bg-panel-bg border-t border-panel-border p-1 text-xs flex justify-between px-4 opacity-60">
-    <span>STATUS: {formatRunState(state?.run_state)}</span>
+    <span>STATUS: {formatRunState(state?.run_state)} | MODE: ATTACH | CONTROL: {hasControl() ? 'ENABLED' : (controlOwner ? 'REMOTE' : 'NONE')}</span>
     <span>FAULT: {state?.latched_fault || 'NONE'}</span>
   </footer>
 </div>

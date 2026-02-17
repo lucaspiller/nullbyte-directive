@@ -4,8 +4,34 @@
 
 - Owner: Tooling
 - Last Updated: 2026-02-17
-- Status: Draft v0.1
+- Status: Implemented v0.2
 - Supersedes: `docs/emulator/debug-tool-prd.md` for debugging workflow scope
+
+## Implementation Update (2026-02-17)
+
+Phase 23 shipped with the following operator-facing behavior:
+
+1. `apps/debug-tool` now starts in attach mode against a shared session host.
+2. Attach mode is visualization-first by default; run/step/reset are disabled
+   until an explicit control-attach toggle is enabled.
+3. Control arbitration is host-side and single-owner (other clients stay
+   read-only).
+4. Visualizer surfaces subscribe to host snapshots for registers, memory,
+   disassembly, logs, and TELE-7 state.
+5. `crates/emulator-debug-session` now exposes a visualizer snapshot API with
+   disassembly window + TELE-7 frame buffer.
+6. Host-mediated conformance/hardening checks are wired into root verification
+   targets via `make conformance` and `make hardening`.
+
+## Operator Workflow
+
+1. Start debugging from VS Code (DAP launch/step/breakpoints remain primary
+   control plane).
+2. Open `apps/debug-tool` to attach as a secondary visualizer.
+3. Keep debug-tool in read-only mode for dashboards/peripherals.
+4. Enable "Attach Ctrl" only when local browser control is explicitly needed.
+5. For iterative edits, save in VS Code and apply host reload policy; visualizer
+   panels update from the shared host snapshot stream.
 
 ## Context
 

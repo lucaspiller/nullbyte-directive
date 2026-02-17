@@ -35,9 +35,11 @@ fuzz:
 
 conformance:
 	cargo test -p emulator-core conformance -- --nocapture
+	cargo test -p emulator-debug-session conformance -- --nocapture
 
 hardening:
 	cargo test -p emulator-core --test phase14_suite
+	cargo test -p emulator-debug-session hardening -- --nocapture
 
 determinism-fingerprint:
 	cargo run -p emulator-core --example determinism_fingerprint
