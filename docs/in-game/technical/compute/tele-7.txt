@@ -218,8 +218,8 @@ Register Map
 
 Addr   | Name      | Access | Description
 -------|-----------|--------|----------------------------------------------
-0xE120 | ID        | RO     | Device identifier constant
-0xE121 | VERSION   | RO     | Revision (0x0001)
+0xE120 | ID        | RO     | Device identifier constant (0x0745)
+0xE121 | VERSION   | RO     | Revision (0x0003)
 0xE122 | CTRL      | RW     | Control bits
 0xE123 | STATUS    | RO     | Status flags
 0xE124 | PAGE_BASE | RW     | Base address of 500-word page buffer
@@ -247,11 +247,10 @@ Bits  | Name        | Meaning
 
 Fault Policy
 
-If PAGE_BASE is misaligned (odd address), points to a forbidden region (MMIO,
-DIAG, or non-existent memory), or overlaps reserved space, the device sets
-STATUS.FAULT and renders a blank screen. The CPU is not faulted -- execution
-continues. Clear the fault by writing a valid PAGE_BASE and acknowledging in
-STATUS.
+If PAGE_BASE is misaligned (odd address), below 0x4000, or causes the 500-word
+window to exceed 0xDFFF, the device sets STATUS.FAULT and renders a blank
+screen. The CPU is not faulted -- execution continues. Clear the fault by
+writing a valid PAGE_BASE value.
 
 ================================================================================
 11) Software Patterns
