@@ -12,6 +12,8 @@ use emulator_core::{
     disassemble_window, run_one, step_one, CompositeMmio, CoreConfig, CoreState, DisassemblyRow,
     RunBoundary, RunOutcome, RunState, StepOutcome, Tele7Config, Tele7Peripheral, ROM_END,
 };
+use serde as _;
+use serde_json as _;
 
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -437,13 +439,20 @@ impl DebugSessionHost {
             match assemble(source_path) {
                 Ok(assembled) => {
                     let (artifact, warnings) = BuildArtifact::from_assemble(source_path, assembled);
+                    let current_build = self
+                        .active_artifact
+                        .as_ref()
+                        .map(|a| a.build_id.as_str())
+                        .unwrap_or_default();
                     let current_layout = self
                         .active_artifact
                         .as_ref()
                         .map(|a| a.layout_id.as_str())
                         .unwrap_or_default();
 
-                    if artifact.layout_id == current_layout {
+                    if artifact.build_id == current_build {
+                        Ok(self.build_report(ReloadMode::HotPatch, None, warnings))
+                    } else if artifact.layout_id == current_layout {
                         self.apply_hot_patch(artifact);
                         Ok(self.build_report(ReloadMode::HotPatch, None, warnings))
                     } else {
@@ -976,5 +985,30 @@ mod tests {
         assert_eq!(snapshot_a.memory, snapshot_b.memory);
         assert_eq!(snapshot_a.disassembly, snapshot_b.disassembly);
         assert_eq!(snapshot_a.tele7, snapshot_b.tele7);
+    }
+
+    #[test]
+    fn hot_patch_no_op_when_build_id_unchanged() {
+        let tmp = tempfile::tempdir().expect("tempdir must be created");
+        let src = tmp.path().join("prog.n1");
+        write_file(&src, "MOV R0, #1\nHALT\n");
+
+        let mut host = DebugSessionHost::new(CoreConfig::default());
+        host.launch(&src).expect("launch should succeed");
+
+        let _ = host
+            .instruction_step()
+            .expect("instruction step should succeed");
+        let state_before = host.read_state().expect("state read should succeed");
+        let ids_before = state_before.ids.clone();
+
+        let report = host
+            .reload(&src, ReloadMode::HotPatch)
+            .expect("hot patch should succeed");
+        let state_after = host.read_state().expect("state read should succeed");
+
+        assert_eq!(report.applied_mode, ReloadMode::HotPatch);
+        assert_eq!(state_before.state, state_after.state);
+        assert_eq!(ids_before, state_after.ids);
     }
 }

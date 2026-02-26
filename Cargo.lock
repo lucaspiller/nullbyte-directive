@@ -117,6 +117,8 @@ version = "0.1.0"
 dependencies = [
  "assembler",
  "emulator-core",
+ "serde",
+ "serde_json",
  "tempfile",
 ]
 

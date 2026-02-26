@@ -12,6 +12,7 @@ class DapAdapter {
     this.host = hostClient;
     this.seq = 1;
     this.buffer = Buffer.alloc(0);
+    this.lastLayoutId = null;
   }
 
   start() {
@@ -52,6 +53,12 @@ class DapAdapter {
 
       if (message.type === "request") {
         this.handleRequest(message).catch((error) => {
+          if (message.command === "launch") {
+            this.sendEvent("output", {
+              category: "stderr",
+              output: `launch failed: ${String(error?.message || error)}\n`,
+            });
+          }
           this.sendErrorResponse(message, String(error?.message || error));
         });
       }
@@ -71,17 +78,29 @@ class DapAdapter {
         return;
       case "launch": {
         const program = request.arguments?.program;
+        const cwd = request.arguments?.cwd;
         if (!program) {
           this.sendErrorResponse(request, "launch requires 'program'");
           return;
         }
 
-        const result = await this.host.launch(program);
+        const result = await this.host.launch(program, cwd);
         this.sendResponse(request, {});
         this.sendEvent("output", {
           category: "console",
           output: `session=${result.debugSessionId} build=${result.buildId} layout=${result.layoutId}\n`,
         });
+
+        if (this.lastLayoutId && this.lastLayoutId !== result.layoutId) {
+          this.sendEvent("output", {
+            category: "stderr",
+            output: `layout changed: ${this.lastLayoutId} -> ${result.layoutId}; breakpoints may be remapped or unresolved\n`,
+          });
+        }
+        this.lastLayoutId = result.layoutId;
+
+        this.reportDiagnostics(result.diagnostics || []);
+
         this.sendEvent("stopped", {
           reason: "entry",
           threadId: THREAD_ID,
@@ -104,12 +123,21 @@ class DapAdapter {
         }
 
         const resolved = await this.host.setBreakpoints(sourcePath, lines);
-        this.sendResponse(request, {
-          breakpoints: resolved.map((bp) => ({
-            verified: bp.verified,
-            line: bp.line,
-          })),
-        });
+        const breakpoints = resolved.map((bp) => ({
+          verified: bp.verified,
+          line: bp.line,
+          message: bp.message,
+        }));
+        this.sendResponse(request, { breakpoints });
+
+        for (const bp of breakpoints) {
+          if (!bp.verified && bp.message) {
+            this.sendEvent("output", {
+              category: "stderr",
+              output: `breakpoint unresolved at line ${bp.line}: ${bp.message}\n`,
+            });
+          }
+        }
         return;
       }
       case "continue": {
@@ -218,6 +246,16 @@ class DapAdapter {
       threadId: THREAD_ID,
       allThreadsStopped: true,
     });
+  }
+
+  reportDiagnostics(diagnostics) {
+    for (const diagnostic of diagnostics) {
+      const category = diagnostic.severity === "error" ? "stderr" : "console";
+      this.sendEvent("output", {
+        category,
+        output: `${diagnostic.severity}: ${diagnostic.message}\n`,
+      });
+    }
   }
 
   sendEvent(event, body) {
