@@ -12,7 +12,7 @@ use emulator_core::{
     disassemble_window, run_one, step_one, CompositeMmio, CoreConfig, CoreState, DisassemblyRow,
     RunBoundary, RunOutcome, RunState, StepOutcome, Tele7Config, Tele7Peripheral, ROM_END,
 };
-use serde as _;
+use serde::{Deserialize, Serialize};
 use serde_json as _;
 
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
@@ -86,7 +86,7 @@ pub struct Breakpoint {
 }
 
 /// Core session metadata identifiers.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionIds {
     /// Stable runtime session identifier.
     pub debug_session_id: String,
@@ -119,7 +119,7 @@ pub struct MemoryWindow {
 }
 
 /// TELE-7 visualizer data produced from host-owned peripheral state.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Tele7VisualizerSnapshot {
     /// Whether the TELE-7 output is enabled.
     pub enabled: bool,
@@ -132,7 +132,7 @@ pub struct Tele7VisualizerSnapshot {
 }
 
 /// Visualization-focused host snapshot for debug-tool attach mode.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VisualizerSnapshot {
     /// Current session identifiers.
     pub ids: SessionIds,

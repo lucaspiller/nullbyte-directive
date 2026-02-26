@@ -79,6 +79,10 @@ class InMemorySessionHostClient {
     this.paused = true;
   }
 
+  async tickStep() {
+    return this.instructionStep();
+  }
+
   async readState() {
     return {
       paused: this.paused,
@@ -96,6 +100,22 @@ class InMemorySessionHostClient {
 
   async disconnect() {
     this.paused = true;
+  }
+
+  async readVisualizerSnapshot(before, after) {
+    return {
+      ids: {
+        debug_session_id: this.sessionId,
+        build_id: "local-build",
+        layout_id: "local-layout",
+      },
+      state: await this.readState(),
+      memory: Array.from(this.memory),
+      disassembly: [],
+      tele7: null,
+      before,
+      after,
+    };
   }
 }
 
@@ -261,6 +281,16 @@ class StdioSessionHostClient {
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
     });
+  }
+
+  async tickStep() {
+    await this.ensureStarted();
+    return this.request("tick_step", {});
+  }
+
+  async readVisualizerSnapshot(before, after) {
+    await this.ensureStarted();
+    return this.request("read_visualizer_snapshot", { before, after });
   }
 }
 

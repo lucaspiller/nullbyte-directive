@@ -55,6 +55,12 @@ struct ReadMemoryWindowParams {
     len: usize,
 }
 
+#[derive(Debug, Deserialize)]
+struct ReadVisualizerSnapshotParams {
+    before: usize,
+    after: usize,
+}
+
 #[derive(Debug, Serialize)]
 #[allow(clippy::struct_field_names)]
 struct SessionIdsWire {
@@ -229,6 +235,10 @@ fn handle_request(
             let outcome = host.instruction_step().map_err(host_error_to_string)?;
             to_json_value(step_outcome_to_response(outcome))
         }
+        "tick_step" => {
+            let outcome = host.tick_step().map_err(host_error_to_string)?;
+            to_json_value(step_outcome_to_response(outcome.final_step))
+        }
         "pause" => {
             host.pause().map_err(host_error_to_string)?;
             to_json_value(serde_json::json!({}))
@@ -250,6 +260,13 @@ fn handle_request(
                 start: window.start,
                 bytes: window.bytes,
             })
+        }
+        "read_visualizer_snapshot" => {
+            let params: ReadVisualizerSnapshotParams = parse_params(params)?;
+            let snapshot = host
+                .read_visualizer_snapshot(params.before, params.after)
+                .map_err(host_error_to_string)?;
+            to_json_value(snapshot)
         }
         "disconnect" => {
             host.terminate();

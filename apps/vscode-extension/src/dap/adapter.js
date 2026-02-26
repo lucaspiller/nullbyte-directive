@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 const { createDefaultHostClient } = require("./session_host_client");
+const { SessionBridgeServer } = require("./session_bridge_server");
 
 const THREAD_ID = 1;
 const STACK_FRAME_ID = 100;
@@ -10,13 +11,22 @@ const MEM_SCOPE_ID = 201;
 class DapAdapter {
   constructor(hostClient) {
     this.host = hostClient;
+    this.bridge = new SessionBridgeServer(hostClient);
     this.seq = 1;
     this.buffer = Buffer.alloc(0);
     this.lastLayoutId = null;
+    this.vscodeControlClientId = "vscode-dap";
   }
 
   start() {
+    this.bridge.start().catch((error) => {
+      process.stderr.write(`failed to start session bridge: ${String(error?.message || error)}\n`);
+    });
+
     process.stdin.on("data", (chunk) => this.onData(chunk));
+    process.on("exit", () => {
+      this.bridge.close().catch(() => {});
+    });
   }
 
   onData(chunk) {
@@ -85,6 +95,7 @@ class DapAdapter {
         }
 
         const result = await this.host.launch(program, cwd);
+        this.bridge.setLastLaunch(program, cwd);
         this.sendResponse(request, {});
         this.sendEvent("output", {
           category: "console",
@@ -100,6 +111,9 @@ class DapAdapter {
         this.lastLayoutId = result.layoutId;
 
         this.reportDiagnostics(result.diagnostics || []);
+        if (!this.bridge.controlOwner) {
+          this.bridge.controlOwner = this.vscodeControlClientId;
+        }
 
         this.sendEvent("stopped", {
           reason: "entry",
@@ -141,18 +155,30 @@ class DapAdapter {
         return;
       }
       case "continue": {
+        if (this.bridge.controlOwner !== this.vscodeControlClientId) {
+          this.sendErrorResponse(request, "controls are owned by another client");
+          return;
+        }
         const outcome = await this.host.continueExecution();
         this.sendResponse(request, { allThreadsContinued: true });
         this.sendStopFromOutcome(outcome, "breakpoint");
         return;
       }
       case "next": {
+        if (this.bridge.controlOwner !== this.vscodeControlClientId) {
+          this.sendErrorResponse(request, "controls are owned by another client");
+          return;
+        }
         const outcome = await this.host.instructionStep();
         this.sendResponse(request, {});
         this.sendStopFromOutcome(outcome, "step");
         return;
       }
       case "pause":
+        if (this.bridge.controlOwner !== this.vscodeControlClientId) {
+          this.sendErrorResponse(request, "controls are owned by another client");
+          return;
+        }
         await this.host.pause();
         this.sendResponse(request, {});
         this.sendEvent("stopped", {
@@ -224,6 +250,9 @@ class DapAdapter {
         return;
       }
       case "disconnect":
+        if (this.bridge.controlOwner === this.vscodeControlClientId) {
+          this.bridge.controlOwner = null;
+        }
         await this.host.disconnect();
         this.sendResponse(request, {});
         this.sendEvent("terminated", {});

@@ -10,7 +10,7 @@ publish = false
 path = "src/lib.rs"
 
 [dependencies]
-emulator-core = { workspace = true }
+emulator-core = { workspace = true, features = ["serde"] }
 assembler = { workspace = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

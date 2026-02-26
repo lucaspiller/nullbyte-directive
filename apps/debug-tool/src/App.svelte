@@ -15,6 +15,7 @@
   let isRunning = $state(false);
   let host = $state(null);
   let tele7State = $state(null);
+  let disassembly = $state([]);
   let speedName = $state('FAST');
   let speedIndex = $state(1);
   let controlOwner = $state(null);
@@ -30,6 +31,7 @@
         state = snapshot.state;
         memory = snapshot.memory;
         previousMemory = snapshot.previousMemory;
+        disassembly = snapshot.disassembly;
         tele7State = snapshot.tele7State;
         logs = snapshot.logs;
         isRunning = snapshot.isRunning;
@@ -46,7 +48,7 @@
     attachToSession();
     return () => {
       if (secondaryControlsEnabled && host) {
-        host.releaseControl(clientId);
+        host.releaseControl(clientId).catch(() => {});
       }
       if (unsubscribeHost) {
         unsubscribeHost();
@@ -60,31 +62,41 @@
 
   function step() {
     if (!host || !hasControl()) return;
-    try {
-      host.step(clientId);
-    } catch (e) {
+    host.step(clientId).catch((e) => {
       logs = [...logs, { ts: Date.now(), msg: `Step Error: ${e.message}` }];
-    }
+    });
   }
 
   function run() {
     if (!host || !hasControl()) return;
-    host.run(clientId);
+    try {
+      host.run(clientId);
+    } catch (e) {
+      logs = [...logs, { ts: Date.now(), msg: `Run Error: ${e.message}` }];
+    }
   }
 
   function pause() {
     if (!host || !hasControl()) return;
-    host.pause(clientId);
+    host.pause(clientId).catch((e) => {
+      logs = [...logs, { ts: Date.now(), msg: `Pause Error: ${e.message}` }];
+    });
   }
 
   function reset() {
     if (!host || !hasControl()) return;
-    host.reset(clientId);
+    host.reset(clientId).catch((e) => {
+      logs = [...logs, { ts: Date.now(), msg: `Reset Error: ${e.message}` }];
+    });
   }
 
   function cycleSpeed() {
     if (!host || !hasControl()) return;
-    host.setSpeed(clientId, (speedIndex + 1) % 3);
+    try {
+      host.setSpeed(clientId, (speedIndex + 1) % 3);
+    } catch (e) {
+      logs = [...logs, { ts: Date.now(), msg: `Speed Error: ${e.message}` }];
+    }
   }
 
   let fileInput;
@@ -102,16 +114,22 @@
   function toggleSecondaryControls() {
     if (!host) return;
     if (!secondaryControlsEnabled) {
-      if (host.requestControl(clientId)) {
+      host.requestControl(clientId).then((granted) => {
+        if (!granted) {
+          logs = [...logs, { ts: Date.now(), msg: 'Control lock unavailable: another client owns controls.' }];
+          return;
+        }
         secondaryControlsEnabled = true;
-      } else {
-        logs = [...logs, { ts: Date.now(), msg: 'Control lock unavailable: another client owns controls.' }];
-      }
+      }).catch((e) => {
+        logs = [...logs, { ts: Date.now(), msg: `Control Error: ${e.message}` }];
+      });
       return;
     }
 
     secondaryControlsEnabled = false;
-    host.releaseControl(clientId);
+    host.releaseControl(clientId).catch((e) => {
+      logs = [...logs, { ts: Date.now(), msg: `Release Error: ${e.message}` }];
+    });
   }
 
   function formatRunState(runState) {
@@ -202,7 +220,7 @@
     <!-- Left Column: Disassembly & Registers -->
     <div class="col-span-3 flex flex-col gap-1 h-full min-h-0">
       <div class="flex-1 overflow-hidden bg-panel-bg border border-panel-border flex flex-col">
-        <DisassemblyView pc={state?.arch?.pc || 0} memory={memory} wasmCore={host.core} />
+        <DisassemblyView pc={state?.arch?.pc || 0} rows={disassembly} />
       </div>
       <div class="h-1/3 overflow-hidden bg-panel-bg border border-panel-border flex flex-col">
         <RegisterView arch={state?.arch || {}} />
