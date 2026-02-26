@@ -3,122 +3,6 @@ const fs = require("node:fs");
 const { spawn } = require("node:child_process");
 const readline = require("node:readline");
 
-class InMemorySessionHostClient {
-  constructor() {
-    this.reset();
-  }
-
-  reset() {
-    this.sessionId = `${Date.now().toString(16)}-${Math.random().toString(16).slice(2, 8)}`;
-    this.registers = {
-      R0: 0,
-      R1: 0,
-      R2: 0,
-      R3: 0,
-      R4: 0,
-      R5: 0,
-      R6: 0,
-      R7: 0,
-      PC: 0,
-      SP: 0xfffe,
-      FLAGS: 0,
-      TICK: 0,
-      CAP: 0,
-      CAUSE: 0,
-      EVP: 0,
-    };
-    this.breakpoints = new Map();
-    this.program = null;
-    this.memory = new Uint8Array(0x10000);
-    this.paused = true;
-  }
-
-  async launch(programPath) {
-    this.reset();
-    this.program = path.resolve(programPath);
-    return {
-      debugSessionId: this.sessionId,
-      buildId: "local-build",
-      layoutId: "local-layout",
-      diagnostics: [],
-    };
-  }
-
-  async setBreakpoints(filePath, lines) {
-    const key = path.resolve(filePath);
-    this.breakpoints.set(key, [...new Set(lines)].sort((a, b) => a - b));
-    return lines.map((line) => ({
-      line,
-      verified: true,
-      source: key,
-      message: undefined,
-    }));
-  }
-
-  async continueExecution() {
-    this.paused = false;
-    this.registers.PC = (this.registers.PC + 2) & 0xffff;
-    this.registers.TICK = (this.registers.TICK + 1) & 0xffff;
-    this.paused = true;
-    return {
-      stopReason: "breakpoint",
-      fault: null,
-    };
-  }
-
-  async instructionStep() {
-    this.registers.PC = (this.registers.PC + 2) & 0xffff;
-    this.registers.TICK = (this.registers.TICK + 1) & 0xffff;
-    return {
-      stopReason: "step",
-      fault: null,
-    };
-  }
-
-  async pause() {
-    this.paused = true;
-  }
-
-  async tickStep() {
-    return this.instructionStep();
-  }
-
-  async readState() {
-    return {
-      paused: this.paused,
-      registers: { ...this.registers },
-      runState: "Running",
-    };
-  }
-
-  async readMemoryWindow(start, len) {
-    return {
-      start,
-      bytes: Array.from(this.memory.slice(start, start + len)),
-    };
-  }
-
-  async disconnect() {
-    this.paused = true;
-  }
-
-  async readVisualizerSnapshot(before, after) {
-    return {
-      ids: {
-        debug_session_id: this.sessionId,
-        build_id: "local-build",
-        layout_id: "local-layout",
-      },
-      state: await this.readState(),
-      memory: Array.from(this.memory),
-      disassembly: [],
-      tele7: null,
-      before,
-      after,
-    };
-  }
-}
-
 class StdioSessionHostClient {
   constructor() {
     this.child = null;
@@ -325,14 +209,10 @@ function findWorkspaceRoot(startDir) {
 }
 
 function createDefaultHostClient() {
-  if (process.env.NULLBYTE_DAP_HOST_MODE === "in-memory") {
-    return new InMemorySessionHostClient();
-  }
   return new StdioSessionHostClient();
 }
 
 module.exports = {
-  InMemorySessionHostClient,
   StdioSessionHostClient,
   createDefaultHostClient,
 };
