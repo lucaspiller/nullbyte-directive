@@ -1,47 +1,48 @@
 # Nullbyte Directive Debug Tool
 
-The debug tool is a browser visualizer for a shared `emulator-debug-session`
-runtime. In attach mode, it does not own emulator state; it reads and controls
-the same session used by the VS Code debug adapter.
+The debug-tool supports two routes:
 
-## Start the shared session path
+- `/` (standalone): runs `emulator-wasm` (`WasmCore`) directly in-browser with
+  local run/step/pause/reset and file load.
+- `/attach` (attach mode): read-only visualization of a live VS Code debug
+  session via bridge snapshot polling.
 
-1. Start VS Code debugging with the Nullbyte Directive extension:
-   - Open this repository in VS Code
-     (`/Users/luca/code/personal/nullbyte-directive`).
-   - Open the Run and Debug view.
-   - Use the workspace launch config in `.vscode/launch.json`:
-     `Launch Nullbyte Directive`.
-   - Optionally edit `"program"` to a different assembly source file.
-   - Keep `"hotReloadOnSave": true` in the launch config to enable VS Code
-     save-triggered hot reload.
-   - Press **F5** (or click **Start Debugging**).
-   - Wait for the first stop event (`reason: "entry"`). This confirms the DAP
-     session and host runtime are live.
-2. The DAP adapter launches `emulator-debug-session` via stdio and starts an
-   HTTP bridge (`session_bridge_server.js`) on `127.0.0.1:48765` by default.
-3. Start the debug tool from `apps/debug-tool`:
-   - `npm install`
-   - `npm run dev`
+## Run locally
+
+From `apps/debug-tool`:
+
+1. `npm install`
+2. `npm run dev`
+
+Open:
+
+- Standalone mode: `http://localhost:5173/`
+- Attach mode: `http://localhost:5173/attach`
+
+## Standalone mode (`/`)
+
+- No VS Code debug session required.
+- No network bridge required.
+- Uses in-browser `WasmCore`.
+- Supports:
+  - run/pause
+  - step
+  - reset
+  - speed toggle
+  - `.n1` / `.n1.md` source load
+
+## Attach mode (`/attach`)
+
+- Polls `GET /v1/snapshot` (plus `GET /v1/health`) from the DAP-hosted bridge.
+- Read-only visualization only (no run/step/pause/reset controls).
+- If no active session exists, `/attach` shows a clear "no active attach
+  session" message.
 
 ## Bridge configuration
 
 - Default bridge URL: `http://127.0.0.1:48765`
-- Override in debug-tool with Vite env var:
+- Override with:
   - `VITE_SESSION_BRIDGE_URL=http://127.0.0.1:48765 npm run dev`
-
-## Using attach mode
-
-- The tool continuously polls `/v1/snapshot` for registers, memory, disassembly,
-  and TELE-7 state.
-- Use **Attach Ctrl** to request control ownership.
-- Run/step/tick/reset actions are allowed only for the current control owner.
-- Release control to hand execution back to VS Code or another client.
-
-## Program loading in debug-tool
-
-When the debug-tool owns control, it can submit source through
-`/v1/load_source`. Supported files are `.n1` and `.n1.md`.
 
 ## Build
 
@@ -50,5 +51,4 @@ When the debug-tool owns control, it can submit source through
 ## Key files
 
 - App shell: `apps/debug-tool/src/App.svelte`
-- Shared attach client: `apps/debug-tool/src/lib/session/sharedSessionHost.js`
-- VS Code bridge: `apps/vscode-extension/src/dap/session_bridge_server.js`
+- Attach polling client: `apps/debug-tool/src/lib/session/sharedSessionHost.js`

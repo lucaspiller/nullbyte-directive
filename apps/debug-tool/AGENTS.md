@@ -1,14 +1,16 @@
 # Debug Tool Agent Guide
 
-This application is the browser-based debugger for Nullbyte Directive programs.
-It provides an interactive interface to inspect the emulator state via
-WebAssembly.
+This application is the browser debugger/visualizer for Nullbyte Directive. It
+now supports two explicit modes selected by route.
 
 ## Context
 
 - **Location**: `apps/debug-tool/`
 - **Stack**: Svelte + Vite + Tailwind CSS
-- **Integration**: Consumes `emulator-wasm` (which wraps `emulator-core`)
+- **Integration**:
+  - Standalone (`/`): consumes `emulator-wasm` (`WasmCore`) directly in-browser.
+  - Attach (`/attach`): polls `emulator-debug-session` HTTP bridge
+    (`GET /v1/snapshot`, `GET /v1/health`) for read-only visualization.
 - **Theme**: Dark, terminal-inspired, monospace-first
 
 ## Development Workflow
@@ -26,6 +28,13 @@ Run commands from `apps/debug-tool/`:
 - **WASM First**: The emulator core logic resides in Rust. The frontend should
   only handle UI state and rendering. Do not reimplement core emulation logic in
   JS.
+- **Mode Split Is Required**:
+  - `/` must always work without a VS Code session or network bridge.
+  - `/attach` is visualization-only; do not add run/step/pause/reset or control
+    arbitration flows to attach mode.
+- **Attach API Surface**:
+  - Keep attach mode read-only. Avoid adding `POST /v1/*` call sites in
+    `apps/debug-tool`.
 - **Terminal Aesthetic**: maintain the "hacker/terminal" look.
   - Use `font-mono` for all data displays.
   - Use high-contrast colors (green/amber/red on dark slate).
@@ -34,14 +43,17 @@ Run commands from `apps/debug-tool/`:
   - Use `Uint8Array` views for memory instead of copying large arrays.
   - Batch UI updates if possible.
 - **State Management**:
-  - The `WasmCore` instance is the source of truth.
-  - Svelte components should react to `state` updates triggered by `step()` or
-    `run()`.
+  - Standalone mode source of truth is local `WasmCore`.
+  - Attach mode source of truth is snapshot payloads from the shared session
+    host bridge.
+  - Svelte components should react to snapshot/state updates; avoid duplicating
+    emulator policy in JS.
 
 ## Directory Structure
 
 - `src/lib/components/`: Reusable UI components (RegisterView, MemoryView,
   etc.).
+- `src/lib/session/sharedSessionHost.js`: read-only attach polling client.
 - `src/wasm/`: Destination for the compiled WASM module (gitignored, built via
   `npm run build:wasm`).
-- `src/App.svelte`: Main application shell and state controller.
+- `src/App.svelte`: Route-aware shell (`/` standalone, `/attach` attach).
