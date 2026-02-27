@@ -8,6 +8,7 @@ const SPEEDS = [
 const DEFAULT_BRIDGE_URL = 'http://127.0.0.1:48765';
 const SNAPSHOT_BEFORE = 3;
 const SNAPSHOT_AFTER = 4;
+const WAITING_FOR_LAUNCH_MESSAGE = 'program not launched';
 
 let sharedHostPromise = null;
 
@@ -40,11 +41,22 @@ class SharedSessionHost {
     this.controlOwner = null;
     this.pollTimer = null;
     this.runTimer = null;
+    this.waitingForLaunch = false;
   }
 
   async initialize() {
     this._emitLog(`Connecting to shared host bridge at ${this.bridgeUrl}...`);
-    await this._refreshSnapshot();
+    try {
+      await this._refreshSnapshot();
+    } catch (error) {
+      const message = String(error?.message ?? error);
+      if (message.includes(WAITING_FOR_LAUNCH_MESSAGE)) {
+        this.waitingForLaunch = true;
+        this._emitLog('Waiting for VS Code launch session...');
+      } else {
+        throw error;
+      }
+    }
     this._startPolling();
   }
 
@@ -213,7 +225,16 @@ class SharedSessionHost {
 
     this.pollTimer = setInterval(() => {
       this._refreshSnapshot().catch((error) => {
-        this._emitLog(`Snapshot refresh failed: ${error.message}`);
+        const message = String(error?.message ?? error);
+        if (message.includes(WAITING_FOR_LAUNCH_MESSAGE)) {
+          if (!this.waitingForLaunch) {
+            this.waitingForLaunch = true;
+            this._emitLog('Waiting for VS Code launch session...');
+          }
+          return;
+        }
+        this.waitingForLaunch = false;
+        this._emitLog(`Snapshot refresh failed: ${message}`);
       });
     }, 250);
   }
@@ -222,6 +243,7 @@ class SharedSessionHost {
     const response = await this._get(`/v1/snapshot?before=${SNAPSHOT_BEFORE}&after=${SNAPSHOT_AFTER}`);
     const payload = response.snapshot;
     this.controlOwner = response.controlOwner || null;
+    this.waitingForLaunch = false;
 
     this.previousMemory = new Uint8Array(this.memory);
     this.state = payload.state || {};

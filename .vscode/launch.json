@@ -1,0 +1,25 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run Nullbyte Directive Extension (Dev Host)",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}/apps/vscode-extension",
+        "${workspaceFolder}"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/apps/vscode-extension/**/*.js"
+      ]
+    },
+    {
+      "type": "nullbyte-directive",
+      "request": "launch",
+      "name": "Launch Nullbyte Directive",
+      "program": "${workspaceFolder}/programs/blinker.n1.md",
+      "cwd": "${workspaceFolder}",
+      "hotReloadOnSave": true
+    }
+  ]
+}

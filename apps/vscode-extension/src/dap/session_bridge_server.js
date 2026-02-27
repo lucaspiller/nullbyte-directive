@@ -10,7 +10,8 @@ class SessionBridgeServer {
     this.host = host;
     this.server = null;
     this.port = Number.parseInt(process.env.NULLBYTE_SESSION_BRIDGE_PORT || "", 10) || DEFAULT_PORT;
-    this.controlOwner = null;
+    const seededControlOwner = (process.env.NULLBYTE_SESSION_BRIDGE_CONTROL_OWNER || "").trim();
+    this.controlOwner = seededControlOwner || null;
     this.lastLaunch = null;
     this.tempRoot = null;
   }
@@ -104,7 +105,24 @@ class SessionBridgeServer {
     if (req.method === "GET" && url.pathname === "/v1/snapshot") {
       const before = parseNatural(url.searchParams.get("before"), 3);
       const after = parseNatural(url.searchParams.get("after"), 4);
-      const snapshot = await this.host.readVisualizerSnapshot(before, after);
+      let snapshot;
+      try {
+        snapshot = await this.host.readVisualizerSnapshot(before, after);
+      } catch (error) {
+        const message = String(error?.message || error);
+        if (message.includes("program not launched") && this.lastLaunch) {
+          await this.host.launch(this.lastLaunch.program, this.lastLaunch.cwd);
+          snapshot = await this.host.readVisualizerSnapshot(before, after);
+        } else if (message.includes("program not launched")) {
+          this.writeJson(res, 409, {
+            error: "program not launched",
+            detail: "Start a VS Code Nullbyte Directive launch session first.",
+          });
+          return;
+        } else {
+          throw error;
+        }
+      }
       this.writeJson(res, 200, {
         controlOwner: this.controlOwner,
         snapshot,

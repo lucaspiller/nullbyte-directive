@@ -18,6 +18,9 @@ class NullbyteDebugConfigProvider {
     if (!config.cwd && vscode.workspace.workspaceFolders?.[0]) {
       config.cwd = vscode.workspace.workspaceFolders[0].uri.fsPath;
     }
+    if (config.hotReloadOnSave === undefined) {
+      config.hotReloadOnSave = true;
+    }
     return config;
   }
 }
@@ -70,6 +73,34 @@ function activate(context) {
         });
       },
     ),
+  );
+
+  context.subscriptions.push(
+    vscode.workspace.onDidSaveTextDocument(async (document) => {
+      const session = vscode.debug.activeDebugSession;
+      if (!session || session.type !== "nullbyte-directive") {
+        return;
+      }
+      if (session.configuration?.hotReloadOnSave === false) {
+        return;
+      }
+
+      const fileName = String(document.fileName || "").toLowerCase();
+      if (!(fileName.endsWith(".n1") || fileName.endsWith(".n1.md"))) {
+        return;
+      }
+
+      try {
+        await session.customRequest("nullbyte.reload", {
+          mode: "hot_patch",
+          source: document.fileName,
+          trigger: "save",
+        });
+      } catch (error) {
+        const message = String(error?.message || error);
+        vscode.window.setStatusBarMessage(`Nullbyte reload failed: ${message}`, 4000);
+      }
+    }),
   );
 }
 

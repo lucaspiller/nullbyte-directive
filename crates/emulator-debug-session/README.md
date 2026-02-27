@@ -58,6 +58,12 @@ Contract rules:
 - Params: `{ "file": "<path>", "lines": [10, 12] }`
 - Result: `{ "breakpoints": [{"line":10,"verified":true,"message":null}] }`
 
+`reload`
+
+- Params: `{ "program": "<path>", "mode": "hot_patch" | "clean_run" }`
+- Result:
+  `{ "ids": {...}, "applied_mode": "hot_patch|clean_run", "clean_run_reason": "...|null", "warnings": [...] }`
+
 `continue_execution`
 
 - Params: `{}`

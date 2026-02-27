@@ -103,15 +103,26 @@ class DapClient {
   }
 }
 
-function spawnAdapter() {
+function randomBridgePort() {
+  return 49000 + Math.floor(Math.random() * 1000);
+}
+
+function spawnAdapter({ port, controlOwner } = {}) {
   const proc = spawn(process.execPath, [ADAPTER_PATH], {
     stdio: ["pipe", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      ...(port ? { NULLBYTE_SESSION_BRIDGE_PORT: String(port) } : {}),
+      ...(controlOwner
+        ? { NULLBYTE_SESSION_BRIDGE_CONTROL_OWNER: String(controlOwner) }
+        : {}),
+    },
   });
   return { proc, client: new DapClient(proc) };
 }
 
 test("bind breakpoints and continue produces stopped event", async (t) => {
-  const { proc, client } = spawnAdapter();
+  const { proc, client } = spawnAdapter({ port: randomBridgePort() });
   t.after(() => proc.kill());
 
   const init = await client.request("initialize", {});
@@ -153,7 +164,7 @@ test("bind breakpoints and continue produces stopped event", async (t) => {
 });
 
 test("step flow exposes stack, scopes, and variables", async (t) => {
-  const { proc, client } = spawnAdapter();
+  const { proc, client } = spawnAdapter({ port: randomBridgePort() });
   t.after(() => proc.kill());
 
   assert.equal((await client.request("initialize", {})).success, true);
@@ -204,4 +215,67 @@ test("step flow exposes stack, scopes, and variables", async (t) => {
   });
   assert.equal(memory.success, true);
   assert.ok(memory.body.variables.length > 0);
+});
+
+test("step is rejected when another bridge client owns controls", async (t) => {
+  const { proc, client } = spawnAdapter({
+    port: randomBridgePort(),
+    controlOwner: "ui-client",
+  });
+  t.after(() => proc.kill());
+
+  assert.equal((await client.request("initialize", {})).success, true);
+
+  assert.equal(
+    (
+      await client.request("launch", {
+        program: "programs/blinker.n1.md",
+        cwd: REPO_ROOT,
+      })
+    ).success,
+    true,
+  );
+  await client.waitFor(
+    (msg) => msg.type === "event" && msg.event === "stopped" && msg.body.reason === "entry",
+    DAP_TIMEOUT_MS,
+  );
+
+  const next = await client.request("next", { threadId: 1 });
+  assert.equal(next.success, false);
+  assert.match(next.message || "", /controls are owned by another client/i);
+
+  const output = await client.waitFor(
+    (msg) =>
+      msg.type === "event" &&
+      msg.event === "output" &&
+      /controls are owned by/i.test(msg.body?.output || ""),
+    DAP_TIMEOUT_MS,
+  );
+  assert.match(output.body.output || "", /controls are owned by/i);
+});
+
+test("custom reload request applies hot patch for active launch", async (t) => {
+  const { proc, client } = spawnAdapter({ port: randomBridgePort() });
+  t.after(() => proc.kill());
+
+  assert.equal((await client.request("initialize", {})).success, true);
+  assert.equal(
+    (
+      await client.request("launch", {
+        program: "programs/blinker.n1.md",
+        cwd: REPO_ROOT,
+      })
+    ).success,
+    true,
+  );
+  await client.waitFor(
+    (msg) => msg.type === "event" && msg.event === "stopped" && msg.body.reason === "entry",
+    DAP_TIMEOUT_MS,
+  );
+
+  const reload = await client.request("nullbyte.reload", { mode: "hot_patch" });
+  assert.equal(reload.success, true);
+  assert.equal(typeof reload.body.buildId, "string");
+  assert.equal(typeof reload.body.layoutId, "string");
+  assert.ok(["hot_patch", "clean_run"].includes(reload.body.appliedMode));
 });

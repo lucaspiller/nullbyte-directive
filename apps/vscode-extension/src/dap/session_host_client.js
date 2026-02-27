@@ -27,6 +27,26 @@ class StdioSessionHostClient {
     };
   }
 
+  async reload(programPath, cwdHint, mode = "hot_patch") {
+    const root = findWorkspaceRoot(cwdHint || this.workspaceRoot || process.cwd());
+    const resolvedProgram = path.isAbsolute(programPath)
+      ? programPath
+      : path.resolve(root, programPath);
+    await this.ensureStarted(root);
+    const reload = await this.request("reload", {
+      program: resolvedProgram,
+      mode,
+    });
+    return {
+      debugSessionId: reload.ids.debug_session_id,
+      buildId: reload.ids.build_id,
+      layoutId: reload.ids.layout_id,
+      diagnostics: diagnosticsFromWarnings(reload.warnings || []),
+      appliedMode: reload.applied_mode,
+      cleanRunReason: reload.clean_run_reason || null,
+    };
+  }
+
   async setBreakpoints(filePath, lines) {
     await this.ensureStarted();
     const resolved = path.isAbsolute(filePath)

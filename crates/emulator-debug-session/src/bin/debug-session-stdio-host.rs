@@ -13,7 +13,8 @@ use std::path::Path;
 use assembler as _;
 use emulator_core::{CoreConfig, GeneralRegister, RunBoundary, RunState, StepOutcome};
 use emulator_debug_session::{
-    BreakpointStatus, BreakpointUnresolvedReason, DebugSessionHost, HostError,
+    BreakpointStatus, BreakpointUnresolvedReason, CleanRunReason, DebugSessionHost, HostError,
+    ReloadMode,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -61,6 +62,13 @@ struct ReadVisualizerSnapshotParams {
     after: usize,
 }
 
+#[derive(Debug, Deserialize)]
+struct ReloadParams {
+    program: String,
+    #[serde(default)]
+    mode: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 #[allow(clippy::struct_field_names)]
 struct SessionIdsWire {
@@ -72,6 +80,15 @@ struct SessionIdsWire {
 #[derive(Debug, Serialize)]
 struct LaunchResponse {
     ids: SessionIdsWire,
+    warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ReloadResponse {
+    ids: SessionIdsWire,
+    applied_mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    clean_run_reason: Option<String>,
     warnings: Vec<String>,
 }
 
@@ -173,6 +190,7 @@ fn main() -> io::Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 fn handle_request(
     host: &mut DebugSessionHost,
     _id: u64,
@@ -223,6 +241,23 @@ fn handle_request(
                 .collect();
             to_json_value(SetBreakpointsResponse {
                 breakpoints: mapped,
+            })
+        }
+        "reload" => {
+            let params: ReloadParams = parse_params(params)?;
+            let mode = parse_reload_mode(params.mode.as_deref())?;
+            let report = host
+                .reload(Path::new(&params.program), mode)
+                .map_err(host_error_to_string)?;
+            to_json_value(ReloadResponse {
+                ids: SessionIdsWire {
+                    debug_session_id: report.ids.debug_session_id,
+                    build_id: report.ids.build_id,
+                    layout_id: report.ids.layout_id,
+                },
+                applied_mode: reload_mode_name(report.applied_mode).to_string(),
+                clean_run_reason: report.clean_run_reason.map(clean_run_reason_name),
+                warnings: report.warnings,
             })
         }
         "continue_execution" => {
@@ -323,6 +358,33 @@ fn run_state_name(run_state: RunState) -> String {
         RunState::HaltedForTick => "HaltedForTick".to_string(),
         RunState::HandlerContext => "HandlerContext".to_string(),
         RunState::FaultLatched(code) => format!("FaultLatched({code:?})"),
+    }
+}
+
+fn parse_reload_mode(mode: Option<&str>) -> Result<ReloadMode, String> {
+    match mode {
+        None | Some("hot_patch" | "hot-patch") => Ok(ReloadMode::HotPatch),
+        Some("clean_run" | "clean-run") => Ok(ReloadMode::CleanRun),
+        Some(other) => Err(format!("invalid reload mode: {other}")),
+    }
+}
+
+const fn reload_mode_name(mode: ReloadMode) -> &'static str {
+    match mode {
+        ReloadMode::CleanRun => "clean_run",
+        ReloadMode::HotPatch => "hot_patch",
+    }
+}
+
+fn clean_run_reason_name(reason: CleanRunReason) -> String {
+    match reason {
+        CleanRunReason::Requested => "requested".to_string(),
+        CleanRunReason::HotPatchRequiresPause => "hot_patch_requires_pause".to_string(),
+        CleanRunReason::HotPatchRequiresInstructionBoundary => {
+            "hot_patch_requires_instruction_boundary".to_string()
+        }
+        CleanRunReason::HotPatchAssemblyFailed => "hot_patch_assembly_failed".to_string(),
+        CleanRunReason::HotPatchLayoutIncompatible => "hot_patch_layout_incompatible".to_string(),
     }
 }
 

@@ -16,6 +16,10 @@ class DapAdapter {
     this.buffer = Buffer.alloc(0);
     this.lastLayoutId = null;
     this.vscodeControlClientId = "vscode-dap";
+    this.shuttingDown = false;
+    this.launchProgram = null;
+    this.launchCwd = null;
+    this.hotReloadOnSave = true;
   }
 
   start() {
@@ -24,8 +28,21 @@ class DapAdapter {
     });
 
     process.stdin.on("data", (chunk) => this.onData(chunk));
+    process.stdin.on("end", () => {
+      this.shutdown().catch(() => {});
+    });
+    process.stdin.on("close", () => {
+      this.shutdown().catch(() => {});
+    });
+    process.on("SIGINT", () => {
+      this.shutdown().catch(() => {});
+    });
+    process.on("SIGTERM", () => {
+      this.shutdown().catch(() => {});
+    });
     process.on("exit", () => {
       this.bridge.close().catch(() => {});
+      this.host.disconnect().catch(() => {});
     });
   }
 
@@ -89,12 +106,15 @@ class DapAdapter {
       case "launch": {
         const program = request.arguments?.program;
         const cwd = request.arguments?.cwd;
+        this.hotReloadOnSave = request.arguments?.hotReloadOnSave !== false;
         if (!program) {
           this.sendErrorResponse(request, "launch requires 'program'");
           return;
         }
 
         const result = await this.host.launch(program, cwd);
+        this.launchProgram = program;
+        this.launchCwd = cwd || null;
         this.bridge.setLastLaunch(program, cwd);
         this.sendResponse(request, {});
         this.sendEvent("output", {
@@ -120,6 +140,43 @@ class DapAdapter {
           threadId: THREAD_ID,
           allThreadsStopped: true,
         });
+        return;
+      }
+      case "nullbyte.reload": {
+        if (!this.ensureVscodeControl(request)) {
+          return;
+        }
+        if (!this.launchProgram) {
+          this.sendErrorResponse(request, "no active launch program for reload");
+          return;
+        }
+        const requestedMode = request.arguments?.mode || "hot_patch";
+        const result = await this.host.reload(this.launchProgram, this.launchCwd, requestedMode);
+
+        this.sendResponse(request, {
+          appliedMode: result.appliedMode,
+          cleanRunReason: result.cleanRunReason,
+          buildId: result.buildId,
+          layoutId: result.layoutId,
+        });
+
+        const modeMsg =
+          result.appliedMode === "hot_patch"
+            ? `hot reload applied (build=${result.buildId}, layout=${result.layoutId})`
+            : `reload fell back to clean run (${result.cleanRunReason || "unknown_reason"})`;
+        this.sendEvent("output", {
+          category: result.appliedMode === "hot_patch" ? "console" : "stderr",
+          output: `${modeMsg}\n`,
+        });
+
+        if (this.lastLayoutId && this.lastLayoutId !== result.layoutId) {
+          this.sendEvent("output", {
+            category: "stderr",
+            output: `layout changed: ${this.lastLayoutId} -> ${result.layoutId}; breakpoints may be remapped or unresolved\n`,
+          });
+        }
+        this.lastLayoutId = result.layoutId;
+        this.reportDiagnostics(result.diagnostics || []);
         return;
       }
       case "threads":
@@ -155,8 +212,7 @@ class DapAdapter {
         return;
       }
       case "continue": {
-        if (this.bridge.controlOwner !== this.vscodeControlClientId) {
-          this.sendErrorResponse(request, "controls are owned by another client");
+        if (!this.ensureVscodeControl(request)) {
           return;
         }
         const outcome = await this.host.continueExecution();
@@ -165,8 +221,7 @@ class DapAdapter {
         return;
       }
       case "next": {
-        if (this.bridge.controlOwner !== this.vscodeControlClientId) {
-          this.sendErrorResponse(request, "controls are owned by another client");
+        if (!this.ensureVscodeControl(request)) {
           return;
         }
         const outcome = await this.host.instructionStep();
@@ -175,8 +230,7 @@ class DapAdapter {
         return;
       }
       case "pause":
-        if (this.bridge.controlOwner !== this.vscodeControlClientId) {
-          this.sendErrorResponse(request, "controls are owned by another client");
+        if (!this.ensureVscodeControl(request)) {
           return;
         }
         await this.host.pause();
@@ -253,9 +307,11 @@ class DapAdapter {
         if (this.bridge.controlOwner === this.vscodeControlClientId) {
           this.bridge.controlOwner = null;
         }
-        await this.host.disconnect();
+        this.launchProgram = null;
+        this.launchCwd = null;
         this.sendResponse(request, {});
         this.sendEvent("terminated", {});
+        await this.shutdown();
         return;
       default:
         this.sendResponse(request, {});
@@ -275,6 +331,29 @@ class DapAdapter {
       threadId: THREAD_ID,
       allThreadsStopped: true,
     });
+  }
+
+  ensureVscodeControl(request) {
+    if (!this.bridge.controlOwner) {
+      this.bridge.controlOwner = this.vscodeControlClientId;
+      this.sendEvent("output", {
+        category: "console",
+        output: "acquired control ownership for VS Code debugger\n",
+      });
+      return true;
+    }
+
+    if (this.bridge.controlOwner !== this.vscodeControlClientId) {
+      this.sendEvent("output", {
+        category: "stderr",
+        output:
+          `controls are owned by '${this.bridge.controlOwner}'; detach control in debug-tool or release from the current owner\n`,
+      });
+      this.sendErrorResponse(request, "controls are owned by another client");
+      return false;
+    }
+
+    return true;
   }
 
   reportDiagnostics(diagnostics) {
@@ -322,6 +401,24 @@ class DapAdapter {
     const body = Buffer.from(JSON.stringify(message), "utf8");
     process.stdout.write(`Content-Length: ${body.length}\r\n\r\n`);
     process.stdout.write(body);
+  }
+
+  async shutdown() {
+    if (this.shuttingDown) {
+      return;
+    }
+    this.shuttingDown = true;
+    try {
+      await this.bridge.close();
+    } catch {
+      // Best effort.
+    }
+    try {
+      await this.host.disconnect();
+    } catch {
+      // Best effort.
+    }
+    setTimeout(() => process.exit(0), 0);
   }
 }
 

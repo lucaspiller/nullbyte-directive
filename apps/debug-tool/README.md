@@ -6,7 +6,18 @@ the same session used by the VS Code debug adapter.
 
 ## Start the shared session path
 
-1. Start VS Code debugging with the Nullbyte Directive extension.
+1. Start VS Code debugging with the Nullbyte Directive extension:
+   - Open this repository in VS Code
+     (`/Users/luca/code/personal/nullbyte-directive`).
+   - Open the Run and Debug view.
+   - Use the workspace launch config in `.vscode/launch.json`:
+     `Launch Nullbyte Directive`.
+   - Optionally edit `"program"` to a different assembly source file.
+   - Keep `"hotReloadOnSave": true` in the launch config to enable VS Code
+     save-triggered hot reload.
+   - Press **F5** (or click **Start Debugging**).
+   - Wait for the first stop event (`reason: "entry"`). This confirms the DAP
+     session and host runtime are live.
 2. The DAP adapter launches `emulator-debug-session` via stdio and starts an
    HTTP bridge (`session_bridge_server.js`) on `127.0.0.1:48765` by default.
 3. Start the debug tool from `apps/debug-tool`:

@@ -44,6 +44,11 @@
               "cwd": {
                 "type": "string",
                 "description": "Working directory for source resolution"
+              },
+              "hotReloadOnSave": {
+                "type": "boolean",
+                "description": "When true, saving .n1/.n1.md files sends a hot-reload request to the active debug session.",
+                "default": true
               }
             }
           }
@@ -54,7 +59,8 @@
             "request": "launch",
             "name": "Launch Nullbyte Directive",
             "program": "${file}",
-            "cwd": "${workspaceFolder}"
+            "cwd": "${workspaceFolder}",
+            "hotReloadOnSave": true
           }
         ]
       }
