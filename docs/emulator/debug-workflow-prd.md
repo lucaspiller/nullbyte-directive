@@ -3,82 +3,66 @@
 ## Document Status
 
 - Owner: Tooling
-- Last Updated: 2026-02-17
-- Status: Implemented v0.2
-- Supersedes: `docs/emulator/debug-tool-prd.md` for debugging workflow scope
+- Last Updated: 2026-02-27
+- Status: In Progress v0.4 (Rust-native DAP adapter + simplified control model)
+- Supersedes: v0.3 architecture (Node.js adapter retired)
 
-## Implementation Update (2026-02-17)
+## Delivery Snapshot (2026-02-27)
 
-Phase 23 shipped with the following operator-facing behavior:
+Implemented and retained from v0.3:
 
-1. `apps/debug-tool` now starts in attach mode against a shared session host.
-2. Attach mode is visualization-first by default; run/step/reset are disabled
-   until an explicit control-attach toggle is enabled.
-3. Control arbitration is host-side and single-owner (other clients stay
-   read-only).
-4. Visualizer surfaces subscribe to host snapshots for registers, memory,
-   disassembly, logs, and TELE-7 state.
-5. `crates/emulator-debug-session` now exposes a visualizer snapshot API with
-   disassembly window + TELE-7 frame buffer.
-6. Host-mediated conformance/hardening checks are wired into root verification
-   targets via `make conformance` and `make hardening`.
+- `crates/emulator-debug-session` is the authoritative runtime owner with
+  launch, pause/continue/step, source-first breakpoints, build/layout/session
+  IDs, and hot-reload policy (`CleanRun`/`HotPatch`) plus deterministic fallback
+  reasons. This crate is stable and is not changed in v0.4.
+- Host conformance and hardening tests are wired into root `make conformance`
+  and `make hardening`.
 
-## Operator Workflow
+Targeted for retirement in v0.4:
 
-1. Start debugging from VS Code (DAP launch/step/breakpoints remain primary
-   control plane).
-2. Open `apps/debug-tool` to attach as a secondary visualizer.
-3. Keep debug-tool in read-only mode for dashboards/peripherals.
-4. Enable "Attach Ctrl" only when local browser control is explicitly needed.
-5. For iterative edits, save in VS Code and apply host reload policy; visualizer
-   panels update from the shared host snapshot stream.
+- `debug-session-stdio-host` binary (JSON-line RPC transport replaced by DAP
+  binary directly).
+- `apps/vscode-extension/src/dap/adapter.js` (Node DAP adapter).
+- `apps/vscode-extension/src/dap/session_host_client.js` (Node stdio RPC
+  client).
+- `apps/vscode-extension/src/dap/session_bridge_server.js` (Node HTTP bridge;
+  replaced by Rust HTTP server inside the DAP binary).
+- Control arbitration protocol (`POST /v1/control/request`,
+  `POST /v1/control/release`): VS Code is now the unconditional control plane.
+- Debug-tool control arbitration toggle ("ATTACH/DETACH CTRL").
+- All execution control endpoints on the HTTP bridge (`POST /v1/step`,
+  `/v1/tick`, `/v1/pause`, `/v1/reset`, `/v1/load_source`).
+
+Known functional gaps driving v0.4 work:
+
+- Breakpoints are stored and resolved but never checked during
+  `continue_execution`; hitting a breakpoint does not pause execution.
+- DAP `stackTrace` returns `line: 1, column: 1` unconditionally; VS Code cannot
+  highlight the current source line.
+- The `continue` handler blocks the entire DAP stdin/stdout pipe until a run
+  boundary; `pause` cannot interrupt a running program.
+- `debug-tool` standalone mode (no VS Code session) is broken; the tool has no
+  fallback to `WasmCore` when the bridge is unavailable.
 
 ## Context
 
-The current debug loop is browser-first:
+The original debug loop pain was editor context-switch friction: edit source,
+switch to debug-tool, manually reload, recreate execution position. The v0.3
+architecture addressed this structurally by introducing `emulator-debug-session`
+as a shared host crate and wiring VS Code as the control plane through a DAP
+adapter. The session host layer is sound; the problems to solve now are:
 
-1. Edit source in an editor.
-2. Switch to `apps/debug-tool`.
-3. Manually reload program input.
-4. Recreate execution position after reset.
-
-This creates two problems:
-
-- High friction from repeated context switching.
-- Lost state after each reload, which slows iteration.
-
-The product direction also includes richer peripherals. That makes it more
-important to separate "debug control" from "visualization," so each surface can
-focus on its strengths.
-
-## Investigation Summary
-
-### Current `main` Baseline
-
-`crates/emulator-wasm/src/lib.rs` already exposes useful primitives:
-
-- `assemble_only`
-- `patch_memory`
-- `get_execution_metadata`
-- `reset_and_reload`
-
-These are enough to support hot-reload policy in a host layer.
-
-### `debug-1-discarded` Assessment
-
-Good ideas worth keeping:
-
-- Explicit distinction between clean run and hot patch.
-- Build/layout/session metadata as first-class concepts.
-
-Changes to avoid repeating:
-
-- Reload policy encoded directly in `apps/debug-tool/src/App.svelte`.
-- Hot patch logic that effectively rewrites full binary and can clobber state.
-- Incomplete metadata plumbing (`build_id`/`layout_id` not persisted in core
-  session state).
-- Source map fields with placeholder line data (`line = 0`), which is not
-  sufficient for stable breakpoints.
+1. The v0.3 Node.js DAP adapter introduces a process boundary and language
+   context that puts logic outside `cargo test` reach and slows iteration.
+2. Breakpoints, source-line mapping in the editor, and non-blocking continue are
+   not yet functional, which means the VS Code debug UX does not deliver its
+   core value.
+3. `debug-tool` standalone mode was inadvertently broken by the shift to
+   bridge-only operation. There is no recovery path when no VS Code session is
+   running.
+4. The control arbitration model (two clients negotiate step ownership) adds
+   protocol complexity without a real use case. The tools have distinct roles:
+   VS Code controls, debug-tool visualizes.
 
 ## Problem Statement
 
@@ -164,21 +148,25 @@ Reasoning:
 
 ## Proposed Architecture
 
-1. **Debug Session Host** (new crate, suggested:
-   `crates/emulator-debug-session`)
-   - Owns authoritative `emulator-core` instance.
-   - Runs assembly, stepping, breakpoints, reload policy.
-   - Exposes protocol for DAP adapter and visualizer clients.
+1. **`nullbyte-dap` binary** (new bin target in `crates/emulator-debug-session`)
+   - Speaks DAP on stdin/stdout using the `dap` crate (`dap::Server` poll loop).
+   - Owns `DebugSessionHost` directly — no intermediate JSON-RPC transport.
+   - Concurrently serves a read-only HTTP API on `127.0.0.1:48765`
+     (`GET /v1/snapshot`, `GET /v1/health`) for the debug-tool visualizer.
+   - Launched by the VS Code extension via `cargo run -p emulator-debug-session
+     --bin nullbyte-dap`.
 
-2. **VS Code Adapter**
-   - Implements DAP requests/events.
-   - Delegates execution control to Debug Session Host.
-   - Renders diagnostics and source-level breakpoints in editor.
+2. **`apps/vscode-extension` (reduced)**
+   - `extension.js` only: registers `DebugAdapterExecutable` pointing at the
+     Rust binary, auto-fills launch config, and sends `nullbyte.reload` custom
+     DAP request on `.n1`/`.n1.md` save.
+   - All protocol logic removed; testable entirely through `cargo test`.
 
-3. **Debug Tool Visualizer Mode**
-   - Attaches to host session.
-   - Displays memory/register/peripheral panels.
-   - Does not own stepping policy by default.
+3. **`apps/debug-tool` (split routes)**
+   - `/` — standalone mode: `WasmCore` in-browser, full execution controls, no
+     network dependency.
+   - `/attach` — attach mode: polls `GET /v1/snapshot`, read-only
+     visualization, no execution controls rendered.
 
 ## Functional Requirements
 
@@ -239,8 +227,9 @@ Initial DAP scope:
 
 ### FR-8 Visualizer Subscription
 
-`debug-tool` can subscribe to session snapshots/deltas without becoming the
-control authority.
+In attach mode, `debug-tool` polls session snapshots from the HTTP bridge and
+never issues execution control commands. VS Code is the unconditional control
+plane; there is no negotiated arbitration.
 
 ### FR-9 Diagnostics
 
@@ -268,23 +257,34 @@ flows so `.include` graphs are supported.
 
 ## Milestones
 
-1. **M1: Session Host + Protocol**
-   - New host crate with run/step/reload/breakpoint APIs.
-   - Build/layout ID implementation and reload policy.
-   - Unit tests for reload safety and breakpoint remap behavior.
+1. **M1: Session Host + Protocol** (Completed)
+   - Host crate and protocol implemented.
+   - Build/layout IDs and reload policy implemented.
+   - Reload safety and breakpoint remap tests in place.
 
-2. **M2: VS Code DAP Integration**
-   - Extension + DAP adapter wired to host.
-   - Launch config, stepping, breakpoints, register/memory scopes.
+2. **M2: VS Code DAP Integration** (Completed — Node.js adapter)
+   - Extension + Node.js DAP adapter wired to stdio host transport.
+   - Launch, stepping, breakpoints, register/memory scopes active.
+   - Save-triggered hot reload path active for `.n1` / `.n1.md`.
 
-3. **M3: Debug-Tool Visualizer Mode**
-   - Attach-to-session UX.
-   - Peripheral panes consume host stream.
-   - Optional control affordances behind "secondary control" mode.
+3. **M3: Debug-Tool Visualizer Mode** (Completed — bridge-attach)
+   - Attach-to-session UX via HTTP bridge active.
+   - Peripheral panes consume host snapshot stream.
 
-4. **M4: Hardening**
-   - Cross-check determinism under repeated hot patch cycles.
-   - Conformance + hardening suite coverage for host-mediated runs.
+4. **M4: Hardening** (Completed for current scope)
+   - Determinism checks for repeated patch cycles in host tests.
+   - Conformance + hardening coverage included in root make targets.
+
+5. **M5: Rust-Native DAP Adapter** (In Progress — Phase 27)
+   - `nullbyte-dap` Rust binary replaces Node.js adapter.
+   - Breakpoints fire during `continue`; `stackTrace` resolves real source
+     lines; `continue` is non-blocking.
+   - Extension reduced to ~50-line `extension.js`.
+
+6. **M6: Debug-Tool Standalone/Attach Split** (Planned — Phase 28)
+   - `/` standalone mode restored with `WasmCore`.
+   - `/attach` is read-only visualization; no control affordances.
+   - Control arbitration removed.
 
 ## Risks and Mitigations
 
@@ -313,6 +313,19 @@ flows so `.include` graphs are supported.
 4. **Branch salvage policy:** keep concepts, not UI implementation.
    - Chosen because previous UI changes mixed policy with presentation and added
      noise without strong correctness guarantees.
+
+5. **DAP adapter language:** Rust binary using the `dap` crate, not Node.js.
+   - Chosen so all debug logic is reachable by `cargo test` without a VS Code
+     instance; eliminates the Node.js process boundary and its IPC overhead.
+
+6. **VS Code as sole control plane:** no control arbitration protocol.
+   - Chosen because negotiated ownership adds protocol complexity with no real
+     use case. Debug-tool visualizes; VS Code controls. This is unconditional.
+
+7. **Debug-tool route split (`/` standalone, `/attach` read-only):**
+   - Chosen to restore standalone usability without a VS Code session, and to
+     make the attach mode contract explicit: no execution controls are ever
+     rendered in attach mode.
 
 ## Acceptance Criteria
 
