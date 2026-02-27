@@ -1,3 +1,4 @@
+#![allow(clippy::multiple_crate_versions)]
 //! Session host for Nullbyte Directive debugging workflows.
 //!
 //! This crate provides a transport-agnostic host API that owns runtime state,
@@ -8,12 +9,15 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use assembler::assembler::{assemble, AssembleError, AssembleResult, ListingEntry};
+use dap as _;
 use emulator_core::{
     disassemble_window, run_one, step_one, CompositeMmio, CoreConfig, CoreState, DisassemblyRow,
-    RunBoundary, RunOutcome, RunState, StepOutcome, Tele7Config, Tele7Peripheral, ROM_END,
+    FaultCode, RunBoundary, RunOutcome, RunState, StepOutcome, Tele7Config, Tele7Peripheral,
+    ROM_END,
 };
 use serde::{Deserialize, Serialize};
 use serde_json as _;
+use tokio as _;
 
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -174,6 +178,22 @@ pub struct BuildReport {
     pub warnings: Vec<String>,
 }
 
+/// Stop reason produced by host-managed continue execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContinueStop {
+    /// Execution was interrupted by an explicit pause/disconnect request.
+    PauseRequested,
+    /// Execution reached an active source-mapped breakpoint.
+    Breakpoint,
+    /// Execution faulted.
+    Fault {
+        /// Fault code latched by the core.
+        cause: FaultCode,
+    },
+    /// Execution reached a halt boundary.
+    HaltedForTick,
+}
+
 /// Error returned by host operations.
 #[derive(Debug)]
 pub enum HostError {
@@ -304,6 +324,15 @@ impl BreakpointStore {
 
     fn all(&self) -> Vec<Breakpoint> {
         self.by_source.values().cloned().collect()
+    }
+
+    fn has_address(&self, address: u16) -> bool {
+        self.by_source.values().any(|breakpoint| {
+            matches!(
+                &breakpoint.status,
+                BreakpointStatus::Resolved { addresses } if addresses.contains(&address)
+            )
+        })
     }
 }
 
@@ -557,6 +586,54 @@ impl DebugSessionHost {
         ))
     }
 
+    /// Continues execution while evaluating active breakpoints every instruction.
+    ///
+    /// The supplied callback is polled each instruction and may request a pause.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when session is terminated or not launched.
+    pub fn continue_until_stop<F>(&mut self, mut should_pause: F) -> Result<ContinueStop, HostError>
+    where
+        F: FnMut() -> bool,
+    {
+        self.ensure_not_terminated()?;
+        self.ensure_launched()?;
+        self.resume_from_halted();
+        self.paused = false;
+
+        if self.breakpoints.has_address(self.state.arch.pc()) {
+            self.paused = true;
+            return Ok(ContinueStop::Breakpoint);
+        }
+
+        loop {
+            if should_pause() {
+                self.paused = true;
+                return Ok(ContinueStop::PauseRequested);
+            }
+
+            match step_one(&mut self.state, &mut self.mmio, &self.config) {
+                StepOutcome::Fault { cause } => {
+                    self.paused = true;
+                    return Ok(ContinueStop::Fault { cause });
+                }
+                StepOutcome::HaltedForTick => {
+                    self.paused = true;
+                    return Ok(ContinueStop::HaltedForTick);
+                }
+                StepOutcome::Retired { .. }
+                | StepOutcome::TrapDispatch { .. }
+                | StepOutcome::EventDispatch { .. } => {
+                    if self.breakpoints.has_address(self.state.arch.pc()) {
+                        self.paused = true;
+                        return Ok(ContinueStop::Breakpoint);
+                    }
+                }
+            }
+        }
+    }
+
     /// Executes one instruction while paused.
     ///
     /// # Errors
@@ -691,6 +768,23 @@ impl DebugSessionHost {
         self.breakpoints.all()
     }
 
+    /// Resolves a source-map row for a program counter value.
+    #[must_use]
+    pub fn source_for_pc(&self, pc: u16) -> Option<LayoutEntry> {
+        let address = usize::from(pc);
+        self.active_artifact.as_ref().and_then(|artifact| {
+            artifact.source_map.iter().find_map(|entry| {
+                let start = usize::from(entry.address);
+                let end = start.saturating_add(entry.len_bytes);
+                if (start..end).contains(&address) {
+                    Some(entry.clone())
+                } else {
+                    None
+                }
+            })
+        })
+    }
+
     /// Terminates this session host.
     pub const fn terminate(&mut self) {
         self.terminated = true;
@@ -788,8 +882,8 @@ mod tests {
     use std::fs;
 
     use super::{
-        BreakpointStatus, BreakpointUnresolvedReason, CleanRunReason, DebugSessionHost, HostError,
-        ReloadMode,
+        BreakpointStatus, BreakpointUnresolvedReason, CleanRunReason, ContinueStop,
+        DebugSessionHost, HostError, ReloadMode,
     };
     use emulator_core::{CoreConfig, RunBoundary};
 
@@ -1010,5 +1104,37 @@ mod tests {
         assert_eq!(report.applied_mode, ReloadMode::HotPatch);
         assert_eq!(state_before.state, state_after.state);
         assert_eq!(ids_before, state_after.ids);
+    }
+
+    #[test]
+    fn continue_until_stop_breaks_on_breakpoint() {
+        let tmp = tempfile::tempdir().expect("tempdir must be created");
+        let src = tmp.path().join("prog.n1");
+        write_file(&src, "NOP\nNOP\nHALT\n");
+
+        let mut host = DebugSessionHost::new(CoreConfig::default());
+        host.launch(&src).expect("launch should succeed");
+        let file = src.to_string_lossy().to_string();
+        host.set_breakpoints(&file, &[2])
+            .expect("set breakpoints should succeed");
+
+        let stop = host
+            .continue_until_stop(|| false)
+            .expect("continue should succeed");
+        assert_eq!(stop, ContinueStop::Breakpoint);
+    }
+
+    #[test]
+    fn source_for_pc_uses_active_layout() {
+        let tmp = tempfile::tempdir().expect("tempdir must be created");
+        let src = tmp.path().join("prog.n1");
+        write_file(&src, "NOP\nHALT\n");
+
+        let mut host = DebugSessionHost::new(CoreConfig::default());
+        host.launch(&src).expect("launch should succeed");
+
+        let entry = host.source_for_pc(0).expect("source row should resolve");
+        assert_eq!(entry.line, 1);
+        assert!(entry.file.ends_with("prog.n1"));
     }
 }

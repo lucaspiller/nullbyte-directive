@@ -1,16 +1,15 @@
-const path = require("node:path");
-const vscode = require("vscode");
+const vscode = require('vscode');
 
 class NullbyteDebugConfigProvider {
   resolveDebugConfiguration(_folder, config) {
     if (!config.type) {
-      config.type = "nullbyte-directive";
+      config.type = 'nullbyte-directive';
     }
     if (!config.request) {
-      config.request = "launch";
+      config.request = 'launch';
     }
     if (!config.name) {
-      config.name = "Launch Nullbyte Directive";
+      config.name = 'Launch Nullbyte Directive';
     }
     if (!config.program && vscode.window.activeTextEditor) {
       config.program = vscode.window.activeTextEditor.document.fileName;
@@ -26,79 +25,67 @@ class NullbyteDebugConfigProvider {
 }
 
 class NullbyteDebugAdapterFactory {
-  constructor(context) {
-    this.context = context;
-  }
+  createDebugAdapterDescriptor(session) {
+    const workspaceCwd =
+      session?.configuration?.cwd ||
+      vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ||
+      process.cwd();
 
-  createDebugAdapterDescriptor() {
-    const adapterPath = this.context.asAbsolutePath(
-      path.join("src", "dap", "adapter.js"),
+    return new vscode.DebugAdapterExecutable(
+      'cargo',
+      ['run', '--quiet', '-p', 'emulator-debug-session', '--bin', 'nullbyte-dap'],
+      { cwd: workspaceCwd },
     );
-    return new vscode.DebugAdapterExecutable("node", [adapterPath]);
   }
 }
 
 function activate(context) {
   const configProvider = new NullbyteDebugConfigProvider();
-  const factory = new NullbyteDebugAdapterFactory(context);
+  const factory = new NullbyteDebugAdapterFactory();
 
   context.subscriptions.push(
     vscode.debug.registerDebugConfigurationProvider(
-      "nullbyte-directive",
+      'nullbyte-directive',
       configProvider,
     ),
   );
 
   context.subscriptions.push(
     vscode.debug.registerDebugAdapterDescriptorFactory(
-      "nullbyte-directive",
+      'nullbyte-directive',
       factory,
-    ),
-  );
-
-  context.subscriptions.push(
-    vscode.commands.registerCommand(
-      "nullbyteDirective.startDebugging",
-      async () => {
-        const editor = vscode.window.activeTextEditor;
-        if (!editor) {
-          return;
-        }
-        await vscode.debug.startDebugging(undefined, {
-          type: "nullbyte-directive",
-          request: "launch",
-          name: "Launch Nullbyte Directive",
-          program: editor.document.fileName,
-          cwd: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
-        });
-      },
     ),
   );
 
   context.subscriptions.push(
     vscode.workspace.onDidSaveTextDocument(async (document) => {
       const session = vscode.debug.activeDebugSession;
-      if (!session || session.type !== "nullbyte-directive") {
+      if (!session || session.type !== 'nullbyte-directive') {
         return;
       }
       if (session.configuration?.hotReloadOnSave === false) {
         return;
       }
 
-      const fileName = String(document.fileName || "").toLowerCase();
-      if (!(fileName.endsWith(".n1") || fileName.endsWith(".n1.md"))) {
+      const fileName = String(document.fileName || '').toLowerCase();
+      if (!(fileName.endsWith('.n1') || fileName.endsWith('.n1.md'))) {
         return;
       }
 
       try {
-        await session.customRequest("nullbyte.reload", {
-          mode: "hot_patch",
-          source: document.fileName,
-          trigger: "save",
+        await session.customRequest('restart', {
+          arguments: {
+            mode: 'hot_patch',
+            source: document.fileName,
+            trigger: 'save',
+          },
         });
       } catch (error) {
         const message = String(error?.message || error);
-        vscode.window.setStatusBarMessage(`Nullbyte reload failed: ${message}`, 4000);
+        vscode.window.setStatusBarMessage(
+          `Nullbyte reload failed: ${message}`,
+          4000,
+        );
       }
     }),
   );

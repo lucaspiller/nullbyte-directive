@@ -12,17 +12,10 @@
     "Debuggers"
   ],
   "activationEvents": [
-    "onDebugResolve:nullbyte-directive",
-    "onCommand:nullbyteDirective.startDebugging"
+    "onDebugResolve:nullbyte-directive"
   ],
   "main": "./src/extension.js",
   "contributes": {
-    "commands": [
-      {
-        "command": "nullbyteDirective.startDebugging",
-        "title": "Nullbyte Directive: Start Debug Session"
-      }
-    ],
     "debuggers": [
       {
         "type": "nullbyte-directive",
